@@ -482,6 +482,11 @@ def load_and_preprocess_dataset(
 
     log.subsection("Loading tokenizer")
     tokenizer = AutoTokenizer.from_pretrained(target_model_path, trust_remote_code=True)
+
+    # Important for DFlash: avoid left-padding, because anchor position 0
+    # can otherwise point to padding and crash in create_anchor_block_mask_mod().
+    tokenizer.padding_side = "right"
+
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
