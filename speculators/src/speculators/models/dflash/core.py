@@ -44,8 +44,11 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
     ) -> None:
         # Forcibly override config settings
         if config.transformer_layer_config._attn_implementation is None:  # noqa: SLF001
+            # config.transformer_layer_config._attn_implementation = (  # noqa: SLF001
+            #     "simple_flex_attention"
+            # )
             config.transformer_layer_config._attn_implementation = (  # noqa: SLF001
-                "simple_flex_attention"
+                "sdpa"
             )
         super().__init__(config=config)
         self._init_vocab(config)
@@ -222,16 +225,31 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             anchor_positions=anchor_positions,
             block_size=self.block_size,
         )
-
-        attention_mask = create_block_mask(
-            mask_mod,
-            B=None,
-            H=None,
-            Q_LEN=q_len,
-            KV_LEN=kv_len,
-            device=device,
-        )
-
+        ##### @Moh_7596
+        # attention_mask = create_block_mask(
+        #     mask_mod,
+        #     B=None,
+        #     H=None,
+        #     Q_LEN=q_len,
+        #     KV_LEN=kv_len,
+        #     device=device,
+        # )
+        impl = self.config.transformer_layer_config._attn_implementation
+        if impl == "simple_flex_attention":
+            attention_mask = create_block_mask(
+                mask_mod, B=None, H=None, Q_LEN=q_len, KV_LEN=kv_len, device=device,
+            )
+        else:
+            q_ids = torch.arange(q_len, device=device)
+            kv_ids = torch.arange(kv_len, device=device)
+            keep = mask_mod(
+                torch.zeros((), dtype=torch.long, device=device),
+                torch.zeros((), dtype=torch.long, device=device),
+                q_ids[:, None],
+                kv_ids[None, :],
+            )  # [q_len, kv_len] bool
+            attention_mask = keep[None, None]  # [1,1,q_len,kv_len] bool for SDPA
+        ###############
         mask_tokens_size = num_anchors * self.block_size
 
         mask_token_ids = torch.full(
