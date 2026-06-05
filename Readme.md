@@ -28,13 +28,13 @@ All three install **editable** (`pip install -e`), so source edits take effect i
   source <CANN_HOME>/ascend-toolkit/set_env.sh
   source <CANN_HOME>/nnal/atb/set_env.sh      # ATB — required for LLM scenarios
   ```
-- **Python 3.11** (a conda env is recommended)
-- **PyTorch 2.10.0** + **torch-npu 2.10.0** + **triton-ascend 3.2.1**
-- **numpy == 1.26.4**  (triton-ascend requires this exact version)
-- **patch** (GNU patch — used to patch the bundled protobuf during the op build):
-  ```bash
-  conda install -y -c conda-forge patch
-  ```
+- **conda** (miniconda/anaconda) on `PATH`
+- **An Ascend NPU node with a compatible driver** (`npu-smi info` works)
+
+That's it for hard prerequisites — **`install.sh` provisions the rest itself**: it creates
+the conda env (Python 3.11), installs the pinned Ascend stack
+(**torch 2.10.0 + torch-npu 2.10.0 + triton-ascend 3.2.1 + numpy 1.26.4**), installs GNU
+`patch`, and installs CANN 9.0.0 if it's missing or the wrong version.
 
 > The vLLM and vLLM-Ascend versions must match (this repo pins the `0.20.x` line:
 > vllm `0.20.2`, vllm-ascend `0.20.2rc2`). DFlash on Ascend requires the `0.20.x`
@@ -52,21 +52,41 @@ cd vLLM_NPU
 bash install.sh
 ```
 
-`install.sh` installs the three components **in order** with the correct flags, pins numpy, and verifies the result. It also auto-installs CANN 9.0.0 if it isn't already present.
+`install.sh` is end-to-end: it creates/activates the conda env, installs the Ascend
+torch stack, version-checks and installs CANN 9.0.0 if needed, then builds the three
+components (editable, from source) and verifies. Re-running it is safe (each step skips
+if already satisfied).
 
-**CANN auto-install / proxy.** If CANN isn't found, `install.sh` downloads it from the
-Huawei OBS mirror into `$CANN_HOME` (default `~/CANN/CANN9.0.0`). Override the location
-with `CANN_HOME=...`, and if your node needs a proxy to reach the internet, export it
-**before** running (do not hard-code credentials anywhere in the repo):
+### Configuration (all optional — override via env vars)
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `ENV_NAME` | `vllm-dflash` | conda env name to create/use |
+| `ENV_PREFIX` | *(unset)* | use a **prefix** env at this path instead of a named env |
+| `PYTHON_VERSION` | `3.11` | Python for a freshly created env |
+| `CANN_HOME` | `~/CANN/CANN9.0.0` | where CANN is / gets installed |
+| `CANN_FORCE_REINSTALL` | `0` | set `1` to force a CANN reinstall |
+| `SKIP_TORCH_STACK` | `0` | set `1` if you manage torch/torch-npu/triton yourself |
+| `PIP_EXTRA_INDEX_URL` | *(unset)* | extra pip index for `torch-npu` / `triton-ascend` |
+| `TORCH_INDEX_URL` | *(unset)* | torch index (x86 only: `https://download.pytorch.org/whl/cpu`) |
+
+Examples:
 
 ```bash
+# Use an existing prefix env and your existing CANN location:
+ENV_PREFIX=/home/me/conda/vllm-dflash \
+CANN_HOME=/home/me/CANN/CANN9.0.0 \
+bash install.sh
+
+# Behind a proxy (never hard-code credentials in the repo):
 export https_proxy="http://USER:PASS@HOST:PORT"; export http_proxy="$https_proxy"
-CANN_HOME=/opt/cann/9.0.0 bash install.sh      # example with a custom CANN path
+bash install.sh
 ```
 
-> The downloaded CANN is installed **user-space** (`--install-path`); it does not touch
-> the system NPU driver/firmware. CANN 9.0.0 expects a recent driver — if the toolkit
-> prints a driver/firmware mismatch warning, that firmware update is a separate, root-level step.
+> CANN is installed **user-space** (`--install-path`); it does not touch the system NPU
+> driver/firmware. If the toolkit prints a driver/firmware mismatch warning, that firmware
+> update is a separate, root-level step. If `triton-ascend` can't be found by pip, set
+> `PIP_EXTRA_INDEX_URL` to the Ascend pip index and re-run.
 
 ### Manual install (equivalent to install.sh)
 
@@ -97,7 +117,95 @@ ops compiled in successfully.
 
 ---
 
-## 3. Build notes (why the flags matter)
+## 3. How to use
+
+> Paths below (`/home/...`, `/share/canada_group_folder/...`) are cluster-specific
+> **examples** — adjust them to your checkpoints and repo location. `CANN_HOME` defaults
+> to the example path but is overridable.
+
+### Inference (DFlash speculative decoding)
+
+**Step 1 — set up the runtime environment** (CANN toolkit + ATB libs). The ATB library
+path must match the C++ ABI that torch was built with, hence the `ABI` probe:
+
+```bash
+export CANN_HOME=${CANN_HOME:-/home/n84449292/m84379596/CANN/CANN9.0.0}
+set +u
+source "$CANN_HOME/ascend-toolkit/set_env.sh"
+[ -f "$CANN_HOME/nnal/asdsip/set_env.sh" ] && source "$CANN_HOME/nnal/asdsip/set_env.sh"
+set -u
+ABI=$(python3 -c "import torch; print(1 if torch.compiled_with_cxx11_abi() else 0)")
+export LD_LIBRARY_PATH="$CANN_HOME/nnal/atb/9.0.0/atb/cxx_abi_${ABI}/lib:${LD_LIBRARY_PATH:-}"
+```
+
+(optional) confirm the ATB runtime actually loads:
+
+```bash
+python3 -c "import ctypes; ctypes.CDLL('libatb.so'); print('libatb OK')"
+```
+
+**Step 2 — start the DFlash vLLM server** (Qwen3-8B verifier + DFlash draft, TP=8):
+
+```bash
+cd /home/n84449292/m84379596/DFlash/vLLM_NPU
+
+TARGET=/share/canada_group_folder/ckpt/Qwen3-8B
+DRAFT=/share/canada_group_folder/ckpt/models--z-lab--Qwen3-8B-DFlash-b16/snapshots/071541888480df12d8a1ef7acbaabed88b0a8bd4/
+
+VLLM_USE_V1=1 \
+vllm serve "$TARGET" \
+    --trust-remote-code \
+    --tensor-parallel-size 8 \
+    --max-num-seqs 64 \
+    --max-model-len 4096 \
+    --speculative-config '{"model":"'"$DRAFT"'","num_speculative_tokens":16,"draft_tensor_parallel_size":8}' \
+    --host 0.0.0.0 \
+    --port 30000
+```
+
+**Step 3 — benchmark the running server** (from a second shell). `no_proxy` keeps the
+client talking to `localhost` directly instead of through the cluster HTTP proxy:
+
+```bash
+export no_proxy="localhost,127.0.0.1,::1"
+export NO_PROXY="localhost,127.0.0.1,::1"
+
+python test_bench/bench_dflash_vllm.py \
+    --base-url http://localhost:30000 \
+    --model "$TARGET" \
+    --dataset gsm8k --num-prompts 128 --max-new-tokens 2048 --concurrency 1
+```
+
+### Single-node training on Qwen
+
+> **TODO — to be finalized.** DFlash draft-model training is driven from `speculators/`
+> (with SpecForge). The runtime environment is the same as **Step 1** above (source CANN +
+> set the ATB `LD_LIBRARY_PATH`). Replace the placeholder below with the confirmed
+> single-node launch command:
+>
+> ```bash
+> # placeholder — replace with the actual training entrypoint/config
+> torchrun --standalone --nproc_per_node=8 <training_script>.py \
+>     --model Qwen3-8B --config <train_config> ...
+> ```
+
+### Multi-node training on Qwen
+
+> **TODO — to be finalized.** Run **Step 1** on every node, then launch with the
+> rendezvous flags (master address/port, per-node rank, node count). Placeholder:
+>
+> ```bash
+> # on each node — NODE_RANK=0 is the master
+> torchrun \
+>     --nnodes="$NNODES" --node_rank="$NODE_RANK" \
+>     --master_addr="$MASTER_ADDR" --master_port="$MASTER_PORT" \
+>     --nproc_per_node=8 <training_script>.py \
+>     --model Qwen3-8B --config <train_config> ...
+> ```
+
+---
+
+## 4. Build notes (why the flags matter)
 
 - **`--no-deps` everywhere.** Pip's dependency resolver otherwise drags `numpy`
   back up to 2.x (breaking triton-ascend) and may disturb the pinned
@@ -116,7 +224,7 @@ ops compiled in successfully.
 
 ---
 
-## 4. Notes & limitations
+## 5. Notes & limitations
 
 - Build artifacts (`csrc/build/`, compiled `*.so`, `_cann_ops_custom/` contents,
   protobuf/abseil extraction dirs) are git-ignored and regenerated per machine.
@@ -127,7 +235,7 @@ ops compiled in successfully.
 
 ---
 
-## 5. Attribution & license
+## 6. Attribution & license
 
 This repository redistributes source from three Apache-2.0 projects. Their original
 `LICENSE` files are retained in each subdirectory. All credit for the upstream code

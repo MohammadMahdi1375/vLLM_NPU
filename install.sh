@@ -1,129 +1,185 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  vLLM_NPU installer
-#  Installs (editable, from source): vllm, speculators, vllm-ascend
-#  Auto-detects/installs CANN 9.0.0 if missing.
-#  Target: Huawei Ascend A2 (910B), aarch64, CANN 9.0.0 line, Python 3.11
+#  vLLM_NPU comprehensive installer
+#  Sets up: conda env -> Ascend torch stack -> CANN 9.0.0 -> vllm, speculators,
+#           vllm-ascend (all editable, from source).
+#  Target: Huawei Ascend A2 (910B), aarch64, CANN 9.0.0 line, Python 3.11.
+#
+#  Everything below is overridable via environment variables, e.g.:
+#    ENV_PREFIX=/path/to/env  CANN_HOME=/opt/cann/9.0.0  bash install.sh
 # =============================================================================
 set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-echo "[vLLM_NPU] repo root: ${REPO_ROOT}"
 
-# -----------------------------------------------------------------------------
-# Config (override any of these via environment variables)
-# -----------------------------------------------------------------------------
+# ----------------------------- Config ---------------------------------------
+# Conda environment: choose ONE — a named env (ENV_NAME) or a prefix path (ENV_PREFIX)
+ENV_NAME="${ENV_NAME:-vllm-dflash}"
+ENV_PREFIX="${ENV_PREFIX:-}"                 # if set, a prefix env at this path is used/created
+PYTHON_VERSION="${PYTHON_VERSION:-3.11}"
+
+# Ascend Python stack (pinned)
+TORCH_VERSION="${TORCH_VERSION:-2.10.0}"
+TORCH_NPU_VERSION="${TORCH_NPU_VERSION:-2.10.0}"
+TRITON_ASCEND_VERSION="${TRITON_ASCEND_VERSION:-3.2.1}"
+NUMPY_VERSION="${NUMPY_VERSION:-1.26.4}"
+TORCH_INDEX_URL="${TORCH_INDEX_URL:-}"               # e.g. https://download.pytorch.org/whl/cpu (x86 only)
+PIP_EXTRA_INDEX_URL="${PIP_EXTRA_INDEX_URL:-}"       # optional extra index for torch-npu / triton-ascend
+SKIP_TORCH_STACK="${SKIP_TORCH_STACK:-0}"            # 1 = you manage torch/torch-npu/triton yourself
+
+# CANN
 CANN_VERSION="${CANN_VERSION:-9.0.0}"
-CANN_HOME="${CANN_HOME:-$HOME/CANN/CANN${CANN_VERSION}}"          # where CANN lives / will be installed
-CANN_DOWNLOAD_DIR="${CANN_DOWNLOAD_DIR:-$HOME/cann_dl}"           # where .run files are cached
+CANN_HOME="${CANN_HOME:-$HOME/CANN/CANN${CANN_VERSION}}"
+CANN_DOWNLOAD_DIR="${CANN_DOWNLOAD_DIR:-$HOME/cann_dl}"
 CANN_BASE_URL="https://ascend-repo.obs.cn-east-2.myhuaweicloud.com/CANN/CANN%20${CANN_VERSION}"
 CANN_REFERER="Referer: https://www.hiascend.com/"
-# If your node reaches the internet through a proxy, export it BEFORE running, e.g.:
-#   export https_proxy="http://USER:PASS@HOST:PORT"; export http_proxy="$https_proxy"
-# (Never hard-code credentials in this file — it is published.)
+CANN_FORCE_REINSTALL="${CANN_FORCE_REINSTALL:-0}"
+# Proxy: if your node needs one, export https_proxy/http_proxy BEFORE running.
+# Do NOT hard-code credentials here (this file is public).
 
-# -----------------------------------------------------------------------------
-# CANN helpers
-# -----------------------------------------------------------------------------
-source_cann() {
-  local home="$1"; set +u
-  source "${home}/ascend-toolkit/set_env.sh"
-  [ -f "${home}/nnal/atb/set_env.sh" ] && source "${home}/nnal/atb/set_env.sh"   # ATB = LLM scenarios
-  set -u
+echo "[vLLM_NPU] repo root: ${REPO_ROOT}"
+
+# ----------------------------- Conda env ------------------------------------
+CONDA_BASE="$(conda info --base 2>/dev/null || true)"
+[ -n "${CONDA_BASE}" ] || { echo "ERROR: conda not found on PATH. Install miniconda/anaconda first."; exit 1; }
+set +u; source "${CONDA_BASE}/etc/profile.d/conda.sh"; set -u
+
+if [ -n "${ENV_PREFIX}" ]; then
+  [ -d "${ENV_PREFIX}" ] || { echo "[env] creating prefix env at ${ENV_PREFIX} (python ${PYTHON_VERSION})"; \
+                              conda create -y -p "${ENV_PREFIX}" "python=${PYTHON_VERSION}"; }
+  TARGET="${ENV_PREFIX}"
+else
+  if ! conda env list | awk '{print $1}' | grep -qx "${ENV_NAME}"; then
+    echo "[env] creating env '${ENV_NAME}' (python ${PYTHON_VERSION})"
+    conda create -y -n "${ENV_NAME}" "python=${PYTHON_VERSION}"
+  fi
+  TARGET="${ENV_NAME}"
+fi
+set +u; conda activate "${TARGET}"; set -u
+echo "[env] active python: $(python -c 'import sys;print(sys.executable)')"
+
+# ----------------------------- CANN helpers ---------------------------------
+source_cann() { local h="$1"; set +u; source "${h}/ascend-toolkit/set_env.sh"; \
+                [ -f "${h}/nnal/atb/set_env.sh" ] && source "${h}/nnal/atb/set_env.sh"; set -u; }
+cann_complete() { local h="$1"; [ -f "${h}/ascend-toolkit/set_env.sh" ] && \
+                  [ -d "${h}/ascend-toolkit/latest/opp" ] && [ -f "${h}/nnal/atb/set_env.sh" ]; }
+cann_detect_version() {  # echo "X.Y.Z" found near a CANN home, else nothing
+  local h="$1" vf v
+  for vf in "${h}"/version.cfg "${h}"/ascend-toolkit/latest/version.cfg \
+            "${h}"/ascend-toolkit/latest/*/version.info "${h}"/*/version.cfg; do
+    [ -f "${vf}" ] || continue
+    v="$(grep -oE '[0-9]+\.[0-9]+\.[0-9]+' "${vf}" 2>/dev/null | head -1)"
+    [ -n "${v}" ] && { echo "${v}"; return 0; }
+  done
+  echo "$2" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1   # fall back to a path hint
 }
-
-cann_complete() {  # "everything there" = toolkit + 910b ops + nnal/atb
-  local home="$1"
-  [ -f "${home}/ascend-toolkit/set_env.sh" ] \
-    && [ -d "${home}/ascend-toolkit/latest/opp" ] \
-    && [ -f "${home}/nnal/atb/set_env.sh" ]
-}
-
 install_cann() {
   local arch; arch="$(uname -m)"
-  local toolkit="Ascend-cann-toolkit_${CANN_VERSION}_linux-${arch}.run"
-  local ops="Ascend-cann-910b-ops_${CANN_VERSION}_linux-${arch}.run"   # A2 kernels/ops (renamed in 9.0.0)
-  local nnal="Ascend-cann-nnal_${CANN_VERSION}_linux-${arch}.run"
+  local tk="Ascend-cann-toolkit_${CANN_VERSION}_linux-${arch}.run"
+  local ops="Ascend-cann-910b-ops_${CANN_VERSION}_linux-${arch}.run"
+  local nn="Ascend-cann-nnal_${CANN_VERSION}_linux-${arch}.run"
   mkdir -p "${CANN_DOWNLOAD_DIR}" "${CANN_HOME}"
   ( cd "${CANN_DOWNLOAD_DIR}"
-    for f in "${toolkit}" "${ops}" "${nnal}"; do
-      if [ -s "${f}" ]; then
-        echo "  have ${f}"
-      else
+    for f in "${tk}" "${ops}" "${nn}"; do
+      if [ -s "${f}" ]; then echo "  have ${f}"; else
         echo "  downloading ${f} ..."
-        # -c resumes partials; --no-check-certificate for TLS-intercepting proxies
         wget -c --no-check-certificate --header="${CANN_REFERER}" -O "${f}.part" "${CANN_BASE_URL}/${f}"
         mv "${f}.part" "${f}"
       fi
       chmod +x "${f}"
     done
-    echo "  installing toolkit ..."; "./${toolkit}" --full --quiet --install-path="${CANN_HOME}"
+    echo "  installing toolkit ...";   "./${tk}"  --full    --quiet --install-path="${CANN_HOME}"
     source_cann "${CANN_HOME}"
-    echo "  installing 910b ops ..."; "./${ops}"  --install --quiet --install-path="${CANN_HOME}"
-    echo "  installing nnal ...";     "./${nnal}" --install --quiet --install-path="${CANN_HOME}"
-  )
+    echo "  installing 910b ops ...";  "./${ops}" --install --quiet --install-path="${CANN_HOME}"
+    echo "  installing nnal ...";      "./${nn}"  --install --quiet --install-path="${CANN_HOME}" )
 }
 
-# -----------------------------------------------------------------------------
-# 0. CANN: detect -> skip, else download + install
-# -----------------------------------------------------------------------------
-if [ -n "${ASCEND_TOOLKIT_HOME:-}" ]; then
-  echo "[vLLM_NPU] CANN already sourced (ASCEND_TOOLKIT_HOME=${ASCEND_TOOLKIT_HOME}) — skipping CANN install."
+# ----------------------------- CANN: detect / version-check / install -------
+need_cann=1
+if [ "${CANN_FORCE_REINSTALL}" = "1" ]; then
+  echo "[cann] CANN_FORCE_REINSTALL=1 — will (re)install ${CANN_VERSION}"
+elif [ -n "${ASCEND_TOOLKIT_HOME:-}" ]; then
+  cv="$(cann_detect_version "${ASCEND_TOOLKIT_HOME}" "${ASCEND_TOOLKIT_HOME}")"
+  if [ "${cv}" = "${CANN_VERSION}" ]; then
+    echo "[cann] sourced CANN ${cv} matches required ${CANN_VERSION} — skipping install."; need_cann=0
+  else
+    echo "[cann] sourced CANN version='${cv:-unknown}' != required ${CANN_VERSION} — will install to ${CANN_HOME}."
+  fi
 elif cann_complete "${CANN_HOME}"; then
-  echo "[vLLM_NPU] CANN ${CANN_VERSION} found at ${CANN_HOME} — sourcing, skipping install."
-  source_cann "${CANN_HOME}"
+  cv="$(cann_detect_version "${CANN_HOME}" "${CANN_HOME}")"
+  if [ "${cv}" = "${CANN_VERSION}" ] || [ -z "${cv}" ]; then
+    echo "[cann] found CANN at ${CANN_HOME} (version='${cv:-unknown}') — sourcing, skipping install."
+    source_cann "${CANN_HOME}"; need_cann=0
+  else
+    echo "[cann] CANN at ${CANN_HOME} is '${cv}', not ${CANN_VERSION} — will install."
+  fi
 else
-  echo "[vLLM_NPU] CANN ${CANN_VERSION} not found at ${CANN_HOME} — downloading & installing (user-space)..."
-  echo "           (set CANN_HOME / https_proxy first if you want a different path / proxy)"
-  install_cann
-  source_cann "${CANN_HOME}"
+  echo "[cann] no CANN ${CANN_VERSION} found — will download & install to ${CANN_HOME}."
 fi
-echo "[vLLM_NPU] ASCEND_TOOLKIT_HOME=${ASCEND_TOOLKIT_HOME:-<unset>}"
+if [ "${need_cann}" = "1" ]; then install_cann; source_cann "${CANN_HOME}"; fi
+echo "[cann] ASCEND_TOOLKIT_HOME=${ASCEND_TOOLKIT_HOME:-<unset>}"
 
-# -----------------------------------------------------------------------------
-# 1. Python-side prerequisites (these are version-pinned; install them yourself
-#    from the Ascend index — this script only checks and pins numpy)
-# -----------------------------------------------------------------------------
-python -c "import torch, torch_npu" 2>/dev/null || {
-  echo "ERROR: torch / torch_npu not importable. Install torch==2.10.0, torch-npu==2.10.0,"
-  echo "       and triton-ascend==3.2.1 (from the Ascend index) before running this."
-  exit 1
+# ----------------------------- Ascend torch stack ---------------------------
+torch_stack_ok() {
+python - "$TORCH_VERSION" "$TORCH_NPU_VERSION" "$TRITON_ASCEND_VERSION" "$NUMPY_VERSION" <<'PY' 2>/dev/null
+import importlib.metadata as m, sys
+want=dict(zip(["torch","torch-npu","triton-ascend","numpy"], sys.argv[1:5]))
+for p,v in want.items():
+    try: cur=m.version(p).split("+")[0]
+    except Exception: sys.exit(1)
+    if cur!=v: sys.exit(1)
+sys.exit(0)
+PY
 }
-
-if ! command -v patch >/dev/null 2>&1; then
-  echo "[vLLM_NPU] 'patch' not found — installing via conda-forge..."
-  conda install -y -c conda-forge patch
+if [ "${SKIP_TORCH_STACK}" = "1" ]; then
+  echo "[torch] SKIP_TORCH_STACK=1 — leaving torch stack as-is."
+elif torch_stack_ok; then
+  echo "[torch] torch/torch-npu/triton-ascend/numpy already at required versions — skipping."
+else
+  echo "[torch] installing Ascend torch stack (torch=${TORCH_VERSION}, torch-npu=${TORCH_NPU_VERSION}, triton-ascend=${TRITON_ASCEND_VERSION}, numpy=${NUMPY_VERSION}) ..."
+  TIDX=(); [ -n "${TORCH_INDEX_URL}" ]     && TIDX=(--index-url "${TORCH_INDEX_URL}")
+  XIDX=(); [ -n "${PIP_EXTRA_INDEX_URL}" ] && XIDX=(--extra-index-url "${PIP_EXTRA_INDEX_URL}")
+  pip install "${TIDX[@]}" "torch==${TORCH_VERSION}"
+  pip install pyyaml setuptools decorator
+  pip install "${XIDX[@]}" "torch-npu==${TORCH_NPU_VERSION}"
+  pip install "${XIDX[@]}" "triton-ascend==${TRITON_ASCEND_VERSION}" \
+    || echo "WARN: triton-ascend install failed — set PIP_EXTRA_INDEX_URL to the Ascend pip index and re-run."
+  pip install "numpy==${NUMPY_VERSION}"
 fi
-echo "[vLLM_NPU] patch: $(command -v patch)"
 
-echo "[vLLM_NPU] pinning numpy==1.26.4 (triton-ascend requirement)..."
-pip install --no-build-isolation "numpy==1.26.4"
+python -c "import torch, torch_npu" 2>/dev/null || {
+  echo "ERROR: torch / torch_npu still not importable. Install them manually (see README) and re-run,"
+  echo "       or set PIP_EXTRA_INDEX_URL to the Ascend index."; exit 1; }
 
-# -----------------------------------------------------------------------------
-# 2-4. The three components (editable, from source, dependency-free)
-# -----------------------------------------------------------------------------
-echo "[vLLM_NPU] installing vllm (editable)..."
+# ----------------------------- build tool: patch ----------------------------
+command -v patch >/dev/null 2>&1 || { echo "[deps] installing 'patch'..."; conda install -y -c conda-forge patch; }
+
+# numpy pin (guard against any resolver bumping it)
+pip install --no-build-isolation "numpy==${NUMPY_VERSION}"
+
+# ----------------------------- the three components -------------------------
+echo "[build] vllm (editable)..."
 ( cd "${REPO_ROOT}/vllm"        && VLLM_TARGET_DEVICE=empty pip install -e . --no-build-isolation --no-deps )
 
-echo "[vLLM_NPU] installing speculators (editable)..."
+echo "[build] speculators (editable)..."
 ( cd "${REPO_ROOT}/speculators" && pip install -e . --no-build-isolation --no-deps )
 
-PB_SRC="${REPO_ROOT}/vllm-ascend/csrc/third_party/protobuf/protobuf-all-25.1.tar.gz"
-[ -s "${PB_SRC}" ] || echo "WARNING: ${PB_SRC} missing/empty — vllm-ascend op build needs protobuf-25.1 source."
-echo "[vLLM_NPU] installing vllm-ascend (editable, compiling custom ops)..."
+PB="${REPO_ROOT}/vllm-ascend/csrc/third_party/protobuf/protobuf-all-25.1.tar.gz"
+[ -s "${PB}" ] || echo "WARNING: ${PB} missing/empty — vllm-ascend op build needs protobuf-25.1 source."
+echo "[build] vllm-ascend (editable, compiling custom ops)..."
 ( cd "${REPO_ROOT}/vllm-ascend" && rm -rf csrc/build build dist ./*.egg-info \
     && pip install -e . --no-build-isolation --no-deps )
 
-# -----------------------------------------------------------------------------
-# 5. Verify
-# -----------------------------------------------------------------------------
-echo "[vLLM_NPU] verifying..."
+# ----------------------------- verify ---------------------------------------
+echo "[verify]"
 pip list --editable | grep -iE "vllm|speculators" || true
 python - <<'PY'
-import numpy, vllm, vllm_ascend, speculators
+import numpy, torch, torch_npu, vllm, vllm_ascend, speculators
 print("numpy      ", numpy.__version__)
+print("torch      ", torch.__version__)
+print("torch_npu  ", torch_npu.__version__)
 print("vllm       ", vllm.__file__)
 print("vllm_ascend", vllm_ascend.__file__)
 print("speculators", speculators.__file__)
 print("ALL OK — no 'Failed to register custom ops' above means DFlash ops are compiled in.")
 PY
-echo "[vLLM_NPU] done."
+echo "[vLLM_NPU] done. Activate with:  conda activate ${TARGET}"
