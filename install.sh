@@ -38,6 +38,17 @@ CANN_FORCE_REINSTALL="${CANN_FORCE_REINSTALL:-0}"
 
 echo "[vLLM_NPU] repo root: ${REPO_ROOT}"
 
+# Guard: if the README's placeholder proxy was pasted literally, it would crash
+# conda/pip with a cryptic "Failed to parse" error. Detect and unset it.
+for _pv in https_proxy http_proxy HTTPS_PROXY HTTP_PROXY; do
+  _val="${!_pv:-}"
+  if [ -n "${_val}" ] && printf '%s' "${_val}" | grep -qiE 'USER:PASS|HOST:PORT'; then
+    echo "[proxy] WARNING: ${_pv}='${_val}' is the README placeholder, not a real proxy — unsetting."
+    echo "        If your node needs a proxy, export a real one: https_proxy=http://user:pass@host:port"
+    unset "${_pv}"
+  fi
+done
+
 # ----------------------------- Conda env ------------------------------------
 CONDA_BASE="$(conda info --base 2>/dev/null || true)"
 [ -n "${CONDA_BASE}" ] || { echo "ERROR: conda not found on PATH. Install miniconda/anaconda first."; exit 1; }
