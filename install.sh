@@ -193,8 +193,8 @@ pip install --no-build-isolation "numpy==${NUMPY_VERSION}"
 
 # Build-time deps. With --no-build-isolation the editable builds run against THIS env,
 # so the PEP 518 build requirements (e.g. setuptools_scm for vllm) must be present here.
-echo "[build] installing build-time deps (setuptools_scm, wheel, packaging, ninja, cmake)..."
-pip install --retries 15 --timeout 300 "setuptools>=64" setuptools_scm wheel packaging ninja cmake
+echo "[build] installing build-time deps (setuptools_scm, setuptools-git-versioning, wheel, packaging, ninja, cmake)..."
+pip install --retries 15 --timeout 300 "setuptools>=64" setuptools_scm setuptools-git-versioning wheel packaging ninja cmake
 
 # ----------------------------- the three components -------------------------
 echo "[build] vllm (editable)..."
