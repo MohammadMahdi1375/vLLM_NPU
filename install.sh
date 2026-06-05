@@ -23,7 +23,7 @@ TORCH_NPU_VERSION="${TORCH_NPU_VERSION:-2.10.0}"
 TRITON_ASCEND_VERSION="${TRITON_ASCEND_VERSION:-3.2.1}"
 NUMPY_VERSION="${NUMPY_VERSION:-1.26.4}"
 TORCH_INDEX_URL="${TORCH_INDEX_URL:-}"               # e.g. https://download.pytorch.org/whl/cpu (x86 only)
-PIP_EXTRA_INDEX_URL="${PIP_EXTRA_INDEX_URL:-}"       # optional extra index for torch-npu / triton-ascend
+PIP_EXTRA_INDEX_URL="${PIP_EXTRA_INDEX_URL:-https://mirrors.huaweicloud.com/ascend/repos/pypi}"  # Ascend pip mirror (torch-npu / triton-ascend)
 SKIP_TORCH_STACK="${SKIP_TORCH_STACK:-0}"            # 1 = you manage torch/torch-npu/triton yourself
 
 # CANN
@@ -55,8 +55,18 @@ CONDA_BASE="$(conda info --base 2>/dev/null || true)"
 set +u; source "${CONDA_BASE}/etc/profile.d/conda.sh"; set -u
 
 if [ -n "${ENV_PREFIX}" ]; then
-  [ -d "${ENV_PREFIX}" ] || { echo "[env] creating prefix env at ${ENV_PREFIX} (python ${PYTHON_VERSION})"; \
-                              conda create -y -p "${ENV_PREFIX}" "python=${PYTHON_VERSION}"; }
+  ENV_PREFIX="${ENV_PREFIX%/}"                       # strip any trailing slash
+  if [ -d "${ENV_PREFIX}/conda-meta" ]; then
+    echo "[env] using existing prefix env: ${ENV_PREFIX}"
+  elif [ -e "${ENV_PREFIX}" ] && [ -n "$(ls -A "${ENV_PREFIX}" 2>/dev/null)" ]; then
+    echo "ERROR: '${ENV_PREFIX}' exists but is not a conda env (no conda-meta/)."
+    echo "       Check the real path with:  conda env list"
+    echo "       Then re-run with the exact ENV_PREFIX, or use ENV_NAME for a named env."
+    exit 1
+  else
+    echo "[env] creating prefix env at ${ENV_PREFIX} (python ${PYTHON_VERSION})"
+    conda create -y -p "${ENV_PREFIX}" "python=${PYTHON_VERSION}"
+  fi
   TARGET="${ENV_PREFIX}"
 else
   if ! conda env list | awk '{print $1}' | grep -qx "${ENV_NAME}"; then
