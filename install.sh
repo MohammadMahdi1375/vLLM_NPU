@@ -212,6 +212,26 @@ echo "[build] vllm-ascend (editable, compiling custom ops)..."
     && SETUPTOOLS_SCM_PRETEND_VERSION="${VLLM_ASCEND_PRETEND_VERSION}" \
        pip install -e . --no-build-isolation --no-deps )
 
+# ----------------------------- runtime deps ---------------------------------
+# The editable installs above used --no-deps so pip wouldn't pull a CUDA torch or
+# bump numpy. Install the actual runtime deps now, CONSTRAINED so the pinned
+# torch / torch-npu / triton-ascend / numpy are never changed.
+echo "[deps] installing runtime dependencies (constrained)..."
+CONSTRAINTS="$(mktemp)"
+cat > "${CONSTRAINTS}" <<EOF
+numpy==${NUMPY_VERSION}
+torch==${TORCH_VERSION}
+torch-npu==${TORCH_NPU_VERSION}
+triton-ascend==${TRITON_ASCEND_VERSION}
+EOF
+for r in "${REPO_ROOT}"/vllm/requirements/common.txt "${REPO_ROOT}"/vllm/requirements.txt \
+         "${REPO_ROOT}"/vllm-ascend/requirements.txt "${REPO_ROOT}"/vllm-ascend/requirements/common.txt; do
+  [ -f "${r}" ] && pip install --retries 15 --timeout 300 -c "${CONSTRAINTS}" -r "${r}"
+done
+# speculators' own deps (pydantic etc.) in case they aren't covered above
+pip install --retries 15 --timeout 300 -c "${CONSTRAINTS}" pydantic
+rm -f "${CONSTRAINTS}"
+
 # ----------------------------- verify ---------------------------------------
 echo "[verify]"
 pip list --editable | grep -iE "vllm|speculators" || true
