@@ -157,14 +157,22 @@ elif torch_stack_ok; then
   echo "[torch] torch/torch-npu/triton-ascend/numpy already at required versions — skipping."
 else
   echo "[torch] installing Ascend torch stack (torch=${TORCH_VERSION}, torch-npu=${TORCH_NPU_VERSION}, triton-ascend=${TRITON_ASCEND_VERSION}, numpy=${NUMPY_VERSION}) ..."
+  PIP_NET=(--retries 15 --timeout 300)            # survive flaky-proxy IncompleteRead on big wheels
+  pip_retry() {                                   # retry whole pip install up to 5x (pip resumes partial downloads between tries)
+    local n; for n in 1 2 3 4 5; do
+      pip install "${PIP_NET[@]}" "$@" && return 0
+      echo "[pip] attempt ${n} failed; retrying in 5s..."; sleep 5
+    done
+    return 1
+  }
   TIDX=(); [ -n "${TORCH_INDEX_URL}" ]     && TIDX=(--index-url "${TORCH_INDEX_URL}")
   XIDX=(); [ -n "${PIP_EXTRA_INDEX_URL}" ] && XIDX=(--extra-index-url "${PIP_EXTRA_INDEX_URL}")
-  pip install "${TIDX[@]}" "torch==${TORCH_VERSION}"
-  pip install pyyaml setuptools decorator
-  pip install "${XIDX[@]}" "torch-npu==${TORCH_NPU_VERSION}"
-  pip install "${XIDX[@]}" "triton-ascend==${TRITON_ASCEND_VERSION}" \
-    || echo "WARN: triton-ascend install failed — set PIP_EXTRA_INDEX_URL to the Ascend pip index and re-run."
-  pip install "numpy==${NUMPY_VERSION}"
+  pip_retry "${TIDX[@]}" "torch==${TORCH_VERSION}"
+  pip install "${PIP_NET[@]}" pyyaml setuptools decorator
+  pip_retry "${XIDX[@]}" "torch-npu==${TORCH_NPU_VERSION}"
+  pip_retry "${XIDX[@]}" "triton-ascend==${TRITON_ASCEND_VERSION}" \
+    || echo "WARN: triton-ascend still failed after retries — see the README 'triton-ascend' note for the manual wget fallback."
+  pip install "${PIP_NET[@]}" "numpy==${NUMPY_VERSION}"
 fi
 
 python -c "import torch, torch_npu" 2>/dev/null || {
@@ -176,6 +184,11 @@ command -v patch >/dev/null 2>&1 || { echo "[deps] installing 'patch'..."; conda
 
 # numpy pin (guard against any resolver bumping it)
 pip install --no-build-isolation "numpy==${NUMPY_VERSION}"
+
+# Build-time deps. With --no-build-isolation the editable builds run against THIS env,
+# so the PEP 518 build requirements (e.g. setuptools_scm for vllm) must be present here.
+echo "[build] installing build-time deps (setuptools_scm, wheel, packaging, ninja, cmake)..."
+pip install --retries 15 --timeout 300 "setuptools>=64" setuptools_scm wheel packaging ninja cmake
 
 # ----------------------------- the three components -------------------------
 echo "[build] vllm (editable)..."
