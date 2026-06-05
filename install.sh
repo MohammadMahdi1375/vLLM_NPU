@@ -26,6 +26,12 @@ TORCH_INDEX_URL="${TORCH_INDEX_URL:-}"               # e.g. https://download.pyt
 PIP_EXTRA_INDEX_URL="${PIP_EXTRA_INDEX_URL:-https://mirrors.huaweicloud.com/ascend/repos/pypi}"  # Ascend pip mirror (torch-npu / triton-ascend)
 SKIP_TORCH_STACK="${SKIP_TORCH_STACK:-0}"            # 1 = you manage torch/torch-npu/triton yourself
 
+# Component versions. These are vendored without their own .git, so setuptools_scm can't
+# derive a version from tags — pin them explicitly (matches the Phase-1 build versions).
+VLLM_PRETEND_VERSION="${VLLM_PRETEND_VERSION:-0.20.2}"
+VLLM_ASCEND_PRETEND_VERSION="${VLLM_ASCEND_PRETEND_VERSION:-0.20.2rc2}"
+SPECULATORS_PRETEND_VERSION="${SPECULATORS_PRETEND_VERSION:-0.6.0}"
+
 # CANN
 CANN_VERSION="${CANN_VERSION:-9.0.0}"
 CANN_HOME="${CANN_HOME:-$HOME/CANN/CANN${CANN_VERSION}}"
@@ -192,16 +198,19 @@ pip install --retries 15 --timeout 300 "setuptools>=64" setuptools_scm wheel pac
 
 # ----------------------------- the three components -------------------------
 echo "[build] vllm (editable)..."
-( cd "${REPO_ROOT}/vllm"        && VLLM_TARGET_DEVICE=empty pip install -e . --no-build-isolation --no-deps )
+( cd "${REPO_ROOT}/vllm" && SETUPTOOLS_SCM_PRETEND_VERSION="${VLLM_PRETEND_VERSION}" \
+    VLLM_TARGET_DEVICE=empty pip install -e . --no-build-isolation --no-deps )
 
 echo "[build] speculators (editable)..."
-( cd "${REPO_ROOT}/speculators" && pip install -e . --no-build-isolation --no-deps )
+( cd "${REPO_ROOT}/speculators" && SETUPTOOLS_SCM_PRETEND_VERSION="${SPECULATORS_PRETEND_VERSION}" \
+    pip install -e . --no-build-isolation --no-deps )
 
 PB="${REPO_ROOT}/vllm-ascend/csrc/third_party/protobuf/protobuf-all-25.1.tar.gz"
 [ -s "${PB}" ] || echo "WARNING: ${PB} missing/empty — vllm-ascend op build needs protobuf-25.1 source."
 echo "[build] vllm-ascend (editable, compiling custom ops)..."
 ( cd "${REPO_ROOT}/vllm-ascend" && rm -rf csrc/build build dist ./*.egg-info \
-    && pip install -e . --no-build-isolation --no-deps )
+    && SETUPTOOLS_SCM_PRETEND_VERSION="${VLLM_ASCEND_PRETEND_VERSION}" \
+       pip install -e . --no-build-isolation --no-deps )
 
 # ----------------------------- verify ---------------------------------------
 echo "[verify]"
