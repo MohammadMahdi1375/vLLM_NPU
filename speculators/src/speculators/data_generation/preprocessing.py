@@ -483,6 +483,9 @@ def load_and_preprocess_dataset(
     log.subsection("Loading tokenizer")
     from transformers import PreTrainedTokenizerFast
     tokenizer = PreTrainedTokenizerFast.from_pretrained(target_model_path, trust_remote_code=True)
+    if tokenizer.chat_template is None:  # DEEPSEEK_FALLBACK_CHAT_TEMPLATE
+        tokenizer.chat_template = "{{ bos_token }}{% for message in messages %}{% if message['role'] == 'system' %}{{ message['content'] }}{% elif message['role'] == 'user' %}{{ '<｜User｜>' + message['content'] }}{% elif message['role'] == 'assistant' %}{{ '<｜Assistant｜>' }}{% generation %}{{ message['content'] }}{{ eos_token }}{% endgeneration %}{% endif %}{% endfor %}{% if add_generation_prompt %}{{ '<｜Assistant｜>' }}{% endif %}"
+
 
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
