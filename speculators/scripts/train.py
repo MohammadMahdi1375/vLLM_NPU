@@ -287,7 +287,7 @@ def main(args: argparse.Namespace):
         if _n not in _tlids: _tlids.append(_n)
         _spec = {'method': 'extract_hidden_states', 'num_speculative_tokens': 1, 'draft_model_config': {'hf_config': {'eagle_aux_hidden_state_layer_ids': _tlids}}}
         _kv = {'kv_connector': 'ExampleHiddenStatesConnector', 'kv_role': 'kv_producer', 'kv_connector_extra_config': {'shared_storage_path': args.shared_storage_path}}
-        engine = LLM(model=args.verifier_name_or_path, tensor_parallel_size=args.target_tp_size, enable_expert_parallel=args.enable_expert_parallel, distributed_executor_backend='external_launcher', enforce_eager=True, trust_remote_code=getattr(args, 'trust_remote_code', True), seed=args.seed, speculative_config=_spec, kv_transfer_config=_kv, enable_chunked_prefill=False, gpu_memory_utilization=args.gpu_memory_utilization, max_model_len=4096)
+        engine = LLM(model=args.verifier_name_or_path, tensor_parallel_size=args.target_tp_size, enable_expert_parallel=args.enable_expert_parallel, distributed_executor_backend='external_launcher', enforce_eager=True, trust_remote_code=getattr(args, 'trust_remote_code', True), seed=args.seed, speculative_config=_spec, kv_transfer_config=_kv, enable_chunked_prefill=False, gpu_memory_utilization=args.gpu_memory_utilization, max_model_len=3072)
         args.num_workers = 0
 
     d2t, t2d, draft_vocab_size = parse_vocab_mappings(args)
