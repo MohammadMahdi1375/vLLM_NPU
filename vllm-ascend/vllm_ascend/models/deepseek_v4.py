@@ -977,7 +977,11 @@ class DeepseekV4Model(nn.Module):
             llama_4_scaling = None
 
         hidden_states = hidden_states.unsqueeze(1).repeat(1, self.hc_mult, 1)  # (b,s, c, h)
-        for layer in islice(self.layers, self.start_layer, self.end_layer):
+        _aux = getattr(self, "aux_hidden_state_layers", ())  # Moh_7596
+        aux_hidden_states = []  # Moh_7596
+        for idx, layer in enumerate(islice(self.layers, self.start_layer, self.end_layer), start=self.start_layer):  # Moh_7596
+            if idx in _aux:  # Moh_7596
+                aux_hidden_states.append((hidden_states if residual is None else hidden_states + residual).flatten(1))  # Moh_7596
             hidden_states, residual = layer(positions, hidden_states, residual, llama_4_scaling)
 
         # Stash pre-hc_head residual for the MTP draft (captured copy_).
@@ -1006,6 +1010,8 @@ class DeepseekV4Model(nn.Module):
             return IntermediateTensors({"hidden_states": hidden_states, "residual": residual})
 
         hidden_states = self.norm(hidden_states)
+        if len(aux_hidden_states) > 0:  # Moh_7596
+            return hidden_states, aux_hidden_states  # Moh_7596
         return hidden_states
 
 
@@ -1049,7 +1055,8 @@ class DeepseekV2MixtureOfExperts(MixtureOfExperts):
             moe.experts.update_expert_map()
 
 
-class AscendDeepseekV4ForCausalLM(nn.Module, SupportsPP, DeepseekV2MixtureOfExperts, SupportsLoRA, SupportsEagle):
+from vllm.model_executor.models.interfaces import SupportsEagle3  # Moh_7596
+class AscendDeepseekV4ForCausalLM(nn.Module, SupportsPP, DeepseekV2MixtureOfExperts, SupportsLoRA, SupportsEagle, SupportsEagle3):
     packed_modules_mapping = {
         "gate_up_proj": ["gate_proj", "up_proj"],
     }
@@ -1101,6 +1108,13 @@ class AscendDeepseekV4ForCausalLM(nn.Module, SupportsPP, DeepseekV2MixtureOfExpe
 
     def embed_input_ids(self, input_ids: torch.Tensor) -> torch.Tensor:
         return self.model.embed_input_ids(input_ids)
+
+    def set_aux_hidden_state_layers(self, layers):  # Moh_7596
+        self.model.aux_hidden_state_layers = layers
+
+    def get_eagle3_aux_hidden_state_layers(self):  # Moh_7596
+        n = len(self.model.layers)
+        return (2, n // 2, n - 3)
 
     def forward(
         self,
