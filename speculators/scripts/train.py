@@ -266,7 +266,17 @@ def main(args: argparse.Namespace):
         _shm.in_the_same_node_as = _in_same_node_moh
         from vllm import LLM
         from transformers import AutoConfig as _AutoConfig
-        _vcfg = _AutoConfig.from_pretrained(args.verifier_name_or_path)
+        # _DSV4_CFG_SHIM: transformers lacks deepseek_v4; fall back to raw config.json
+        try:
+            _vcfg = _AutoConfig.from_pretrained(args.verifier_name_or_path)
+        except Exception:
+            import json as _json, os as _os
+            class _CfgShim(dict):
+                __getattr__ = dict.get
+                def to_dict(self):
+                    return dict(self)
+            with open(_os.path.join(args.verifier_name_or_path, 'config.json')) as _cf:
+                _vcfg = _CfgShim(_json.load(_cf))
         _vcfg = getattr(_vcfg, 'text_config', _vcfg)
         _n = _vcfg.num_hidden_layers
         _tlids = list(args.target_layer_ids) if args.target_layer_ids else [2, _n // 2, _n - 3]

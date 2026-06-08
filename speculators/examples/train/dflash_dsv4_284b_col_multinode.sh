@@ -20,7 +20,7 @@
 #*************************** How to Run? ***************************#
 # cd ./speculators
 # bash examples/train/dflash_dsv4_284b_col_multinode.sh 0 2>&1 | tee ./logs/train_dsv4_0.log   # 108
-# bash examples/train/dflash_dsv4_284b_col_multinode.sh 1 2>&1 | tee ./logs/train_dsv4_0.log   # 109
+# bash examples/train/dflash_dsv4_284b_col_multinode.sh 1 2>&1 | tee ./logs/train_dsv4_1.log   # 109
 # ============================================================================
 set -eo pipefail
 
