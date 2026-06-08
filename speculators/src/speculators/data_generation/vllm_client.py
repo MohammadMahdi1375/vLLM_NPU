@@ -150,3 +150,25 @@ def generate_hidden_states(
         timeout=timeout,
     )
     return extract_output(completion, token_ids)
+
+
+# @Moh_7596 in-process hidden-state generation (external_launcher engine)
+from vllm import SamplingParams  # noqa: E402
+
+
+def generate_hidden_states_inprocess(engine, client_item, *, seed: int = 42):
+    token_ids = client_item["input_ids"]
+    messages = client_item.get("messages")
+    sp = SamplingParams(max_tokens=1, temperature=0.0, seed=seed)
+    if messages is None:
+        outputs = engine.generate({"prompt_token_ids": token_ids}, sp)
+    else:
+        outputs = engine.chat(messages, sp, add_generation_prompt=False)
+    out = outputs[0]
+    ptids = list(out.prompt_token_ids) if getattr(out, "prompt_token_ids", None) is not None else None
+    if ptids is not None and ptids != token_ids:
+        raise InvalidResponseError(f"Prompt token IDs mismatch: expected {token_ids}, got {ptids}")
+    kv = getattr(out, "kv_transfer_params", None)
+    if not kv or "hidden_states_path" not in kv:
+        raise InvalidResponseError("RequestOutput missing kv_transfer_params/hidden_states_path")
+    return kv["hidden_states_path"]

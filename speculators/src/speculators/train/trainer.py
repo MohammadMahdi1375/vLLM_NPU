@@ -72,6 +72,15 @@ class Trainer:
         self.setup_trainer()
         self.setup_model()
         self.setup_optimizer()
+        self.tp_gather = self._detect_tp_gather()
+        if self.tp_gather:
+            self.train_loader.dataset.defer_generation = True
+            if self.val_loader is not None:
+                self.val_loader.dataset.defer_generation = True
+        if self.local_rank == 0:
+            root_logger.info(
+                f"[trainer] TP gather/scatter = {'ON' if self.tp_gather else 'OFF'}"
+            )
 
     def setup_trainer(self):
         if self.checkpointer.previous_epoch != -1:
@@ -191,6 +200,8 @@ class Trainer:
             train_loader = tqdm(train_loader, desc=f"Epoch {epoch}")  # type: ignore[assignment]
 
         for batch in train_loader:
+            if self.tp_gather:
+                batch = self._tp_gather_generate_scatter(batch)
             gpu_batch = {
                 k: v.to(self.local_rank, non_blocking=True)
                 if isinstance(v, torch.Tensor)
@@ -228,6 +239,79 @@ class Trainer:
                 )
             self.global_step += 1
 
+    def _detect_tp_gather(self) -> bool:
+        import os as _os
+        forced = _os.environ.get("DFLASH_TP_GATHER")
+        if forced is not None:
+            return forced not in ("", "0", "false", "False", "no")
+        try:
+            engine = getattr(self.train_loader.dataset, "engine", None)
+            if engine is None:
+                return False
+            tp = engine.llm_engine.vllm_config.parallel_config.tensor_parallel_size
+            return int(tp) > 1
+        except Exception:
+            return False
+
+    def _tp_gather_generate_scatter(self, batch):
+        import os as _os
+        from safetensors.torch import load_file
+        from vllm import SamplingParams
+        dataset = self.train_loader.dataset
+        engine = dataset.engine
+        seed = getattr(dataset, "seed", 42)
+        hsd = self.config.hidden_states_dtype
+        transform = getattr(dataset, "transform", None)
+        collate = self.train_loader.collate_fn
+        lengths = [int(x) for x in batch["lengths"].tolist()]
+        ids_flat = batch["input_ids"].reshape(-1)
+        lm_flat = batch["loss_mask"].reshape(-1)
+        local_tokens, local_lossmask = [], []
+        off = 0
+        for L in lengths:
+            local_tokens.append([int(t) for t in ids_flat[off:off + L].tolist()])
+            local_lossmask.append(lm_flat[off:off + L].clone())
+            off += L
+        world = dist.get_world_size()
+        gathered = [None] * world
+        dist.all_gather_object(gathered, local_tokens)
+        counts = [len(gathered[r]) for r in range(world)]
+        global_tokens = [t for r in range(world) for t in gathered[r]]
+        my_rank = dist.get_rank()
+        my_offset = sum(counts[:my_rank])
+        my_count = counts[my_rank]
+        prompts = [{"prompt_token_ids": t} for t in global_tokens]
+        sp = SamplingParams(max_tokens=1, temperature=0.0, seed=seed)
+        outs = engine.generate(prompts, sp, use_tqdm=False) if prompts else []
+        my_outs = outs[my_offset:my_offset + my_count]
+        samples = []
+        for j, o in enumerate(my_outs):
+            kvp = getattr(o, "kv_transfer_params", None)
+            path = kvp.get("hidden_states_path") if isinstance(kvp, dict) else None
+            loaded = load_file(path)
+            hs = loaded["hidden_states"]
+            seq = int(loaded["token_ids"].shape[0])
+            sample = {
+                "hidden_states": hs[:, :-1].flatten(1).to(hsd),
+                "input_ids": loaded["token_ids"],
+                "verifier_last_hidden_states": hs[:, -1].to(hsd),
+                "loss_mask": local_lossmask[j],
+                "lengths": torch.tensor([seq], dtype=torch.long),
+                "position_ids": torch.arange(seq, dtype=torch.long),
+            }
+            if transform:
+                sample = transform(sample)
+            samples.append(sample)
+        for o in outs:
+            kvp = getattr(o, "kv_transfer_params", None)
+            pth = kvp.get("hidden_states_path") if isinstance(kvp, dict) else None
+            if pth:
+                try:
+                    _os.unlink(pth)
+                except OSError:
+                    pass
+        return collate(samples)
+
     @torch.no_grad()
     def val_epoch(self, epoch: int) -> dict[str, float] | None:
         if self.val_loader is None:
@@ -242,6 +326,8 @@ class Trainer:
         val_metrics: dict[str, float] = {}
         num_batches = len(val_loader)
         for batch in val_loader:
+            if self.tp_gather:
+                batch = self._tp_gather_generate_scatter(batch)
             gpu_batch = {
                 k: v.to(self.local_rank, non_blocking=True)
                 if isinstance(v, torch.Tensor)

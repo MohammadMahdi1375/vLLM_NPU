@@ -21,6 +21,7 @@ from speculators.data_generation.vllm_client import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_REQUEST_TIMEOUT,
     generate_hidden_states,
+    generate_hidden_states_inprocess,
 )
 from speculators.train.noise_transforms import TransformTensors
 
@@ -182,6 +183,9 @@ class ArrowDataset(BaseDataset):
         model: str | None = None,
         request_timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
         max_retries: int = DEFAULT_MAX_RETRIES,
+        engine: object | None = None,
+        seed: int = 42,
+        defer_generation: bool = False,
     ):
         """Initialize the ArrowDataset.
         Args:
@@ -217,6 +221,9 @@ class ArrowDataset(BaseDataset):
         self.model = model
         self.request_timeout = request_timeout
         self.max_retries = max_retries
+        self.engine = engine
+        self.seed = seed
+        self.defer_generation = defer_generation
 
         # Delay super init so that `_compute_approx_lengths` has required data
         super().__init__(max_len, transform, hidden_states_dtype)
@@ -242,6 +249,19 @@ class ArrowDataset(BaseDataset):
     def __len__(self):
         return len(self.data)
 
+    def __getitem__(self, index):
+        if getattr(self, "defer_generation", False):
+            item = self.data[index]
+            ids = torch.as_tensor(item["input_ids"], dtype=torch.long)
+            lm = torch.as_tensor(item["loss_mask"])
+            seq = int(ids.shape[0])
+            return {
+                "input_ids": ids,
+                "loss_mask": lm,
+                "lengths": torch.tensor([seq], dtype=torch.long),
+            }
+        return super().__getitem__(index)
+
     def _compute_approx_lengths(self) -> list[int]:
         """Get lengths of the dataset samples."""
         return list(self.data.with_format(None)["seq_len"])
@@ -255,18 +275,21 @@ class ArrowDataset(BaseDataset):
         return None
 
     def _maybe_generate_hs(self, index: int) -> dict[str, torch.Tensor] | None:
-        if not self.client:
+        if self.engine is None and not self.client:
             self._setup_client()
 
         input_ids = self.data[index]["input_ids"].tolist()
         try:
-            hs_filepath = generate_hidden_states(
-                self.client,  # type:ignore[arg-type]
-                self.model,  # type:ignore[arg-type]
-                input_ids,
-                timeout=self.request_timeout,
-                max_retries=self.max_retries,
-            )
+            if self.engine is not None:
+                hs_filepath = generate_hidden_states_inprocess(self.engine, {"input_ids": input_ids}, seed=self.seed)
+            else:
+                hs_filepath = generate_hidden_states(
+                    self.client,  # type:ignore[arg-type]
+                    self.model,  # type:ignore[arg-type]
+                    input_ids,
+                    timeout=self.request_timeout,
+                    max_retries=self.max_retries,
+                )
         except Exception as e:  # noqa: BLE001
             warnings.warn(str(e), stacklevel=1)
             return None

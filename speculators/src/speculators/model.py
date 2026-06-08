@@ -95,12 +95,15 @@ class DraftVocabMixin(nn.Module):
             )
 
         if not self.use_draft_vocab:
-            raise RuntimeError(
-                "Vocab mappings (t2d/d2t) are not needed because "
-                "draft_vocab_size equals verifier vocab_size. "
-                "Set draft_vocab_size < verifier_vocab_size or "
-                "omit t2d/d2t arguments."
-            )
+            # Full vocab (no reduction): store the identity mappings directly.
+            # forward unconditionally uses self.t2d, and __init__ registered
+            # t2d/d2t as None for full vocab, so we MUST set real tensors here
+            # (all-True t2d makes cumsum-1 an identity remap). Originally this
+            # raised, blocking full vocab. Assigning to the registered buffer
+            # keeps it a buffer (moves with model.to(device)).
+            self.t2d = t2d
+            self.d2t = d2t
+            return
 
         if t2d.shape[0] != self.verifier_vocab_size:
             raise ValueError(

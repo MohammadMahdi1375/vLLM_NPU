@@ -94,10 +94,10 @@ def setup_dataloader(
         dataset,
         batch_sampler=batch_sampler,
         num_workers=num_workers,
-        prefetch_factor=prefetch_factor,
+        prefetch_factor=(prefetch_factor if num_workers > 0 else None),
         pin_memory=True,
         collate_fn=create_collate_fn(args.total_seq_len, hidden_size, preprocess),
-        persistent_workers=True,
+        persistent_workers=(num_workers > 0),
     )
 
 
@@ -245,6 +245,37 @@ def main(args: argparse.Namespace):
         )
     hidden_states_dtype = getattr(torch, args.hidden_states_dtype)
 
+    # @Moh_7596 in-process co-located target (external_launcher)
+    engine = None
+    if args.in_process_target:
+        import os as _os
+        import vllm.distributed.parallel_state as _ps
+        def _node_count_moh(_pg=None):
+            _ws = int(_os.environ.get('WORLD_SIZE', '1'))
+            _lws = int(_os.environ.get('LOCAL_WORLD_SIZE', str(_ws)))
+            return max(1, _ws // max(1, _lws))
+        _ps._node_count = _node_count_moh
+        import vllm.distributed.device_communicators.shm_broadcast as _shm
+        def _in_same_node_moh(_pg, source_rank=0):
+            import torch.distributed as _d
+            _lws = int(_os.environ.get('LOCAL_WORLD_SIZE', '0')) or _d.get_world_size()
+            _n = _d.get_world_size(group=_pg)
+            _wnode = _d.get_global_rank(_pg, source_rank) // _lws
+            return [(_d.get_global_rank(_pg, _r) // _lws) == _wnode for _r in range(_n)]
+        _ps.in_the_same_node_as = _in_same_node_moh
+        _shm.in_the_same_node_as = _in_same_node_moh
+        from vllm import LLM
+        from transformers import AutoConfig as _AutoConfig
+        _vcfg = _AutoConfig.from_pretrained(args.verifier_name_or_path)
+        _vcfg = getattr(_vcfg, 'text_config', _vcfg)
+        _n = _vcfg.num_hidden_layers
+        _tlids = list(args.target_layer_ids) if args.target_layer_ids else [2, _n // 2, _n - 3]
+        if _n not in _tlids: _tlids.append(_n)
+        _spec = {'method': 'extract_hidden_states', 'num_speculative_tokens': 1, 'draft_model_config': {'hf_config': {'eagle_aux_hidden_state_layer_ids': _tlids}}}
+        _kv = {'kv_connector': 'ExampleHiddenStatesConnector', 'kv_role': 'kv_producer', 'kv_connector_extra_config': {'shared_storage_path': args.shared_storage_path}}
+        engine = LLM(model=args.verifier_name_or_path, tensor_parallel_size=args.target_tp_size, distributed_executor_backend='external_launcher', enforce_eager=True, trust_remote_code=getattr(args, 'trust_remote_code', True), seed=args.seed, speculative_config=_spec, kv_transfer_config=_kv, enable_chunked_prefill=False, gpu_memory_utilization=0.3, max_model_len=4096)
+        args.num_workers = 0
+
     d2t, t2d, draft_vocab_size = parse_vocab_mappings(args)
 
     # Setup speculator config
@@ -319,6 +350,8 @@ def main(args: argparse.Namespace):
             hidden_states_dtype=hidden_states_dtype,
             request_timeout=args.request_timeout,
             max_retries=args.max_retries,
+            engine=engine,
+            seed=args.seed,
         )
         val_dataset = ArrowDataset(
             datapath=args.data_path,
@@ -332,6 +365,8 @@ def main(args: argparse.Namespace):
             hidden_states_dtype=hidden_states_dtype,
             request_timeout=args.request_timeout,
             max_retries=args.max_retries,
+            engine=engine,
+            seed=args.seed,
         )
 
     train_loader = setup_dataloader(
@@ -647,6 +682,10 @@ def parse_args():
     parser.add_argument("--scheduler-warmup-steps", type=int, default=None)
     parser.add_argument("--scheduler-total-steps", type=int, default=None)
     parser.add_argument("--scheduler-num-cosine-cycles", type=float, default=0.5)
+    # @Moh_7596
+    parser.add_argument("--in-process-target", action="store_true")
+    parser.add_argument("--target-tp-size", type=int, default=1)
+    parser.add_argument("--shared-storage-path", type=str, default="/dev/shm/hidden_states")
     return parser.parse_args()
 
 
