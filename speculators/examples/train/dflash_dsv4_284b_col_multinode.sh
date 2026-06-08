@@ -56,8 +56,8 @@ BLOCK_SIZE=16
 MAX_ANCHORS=512
 VERIFIER_VOCAB=129280
 DRAFT_VOCAB_SIZE=129280
-NUM_LAYERS=5
-TARGET_LAYER_IDS="1 11 21 31 41"
+NUM_LAYERS=1
+TARGET_LAYER_IDS="41"
 # VOCAB: full 151936 (matches SpecForge) — needs the model.py full-vocab patch;
 # we OMIT --draft-vocab-size so the trainer uses the full verifier vocab.
 # ============================================================================
