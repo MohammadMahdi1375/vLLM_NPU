@@ -272,7 +272,11 @@ def main(args: argparse.Namespace):
         except Exception:
             import json as _json, os as _os
             class _CfgShim(dict):
-                __getattr__ = dict.get
+                def __getattr__(self, _k):
+                    try:
+                        return self[_k]
+                    except KeyError:
+                        raise AttributeError(_k)
                 def to_dict(self):
                     return dict(self)
             with open(_os.path.join(args.verifier_name_or_path, 'config.json')) as _cf:
