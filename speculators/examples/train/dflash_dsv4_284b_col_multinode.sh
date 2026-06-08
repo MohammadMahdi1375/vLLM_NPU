@@ -16,6 +16,11 @@
 # from the two logs. They MUST be identical. If they differ, prepare_data is
 # non-deterministic (shuffling) — stop and we pin its seed, or rsync node 0's
 # copy to node 1 instead (see note at the bottom).
+
+#*************************** How to Run? ***************************#
+# cd ./speculators
+# bash examples/train/dflash_dsv4_284b_col_multinode.sh 0 2>&1 | tee ./logs/train_dsv4_0.log   # 108
+# bash examples/train/dflash_dsv4_284b_col_multinode.sh 1 2>&1 | tee ./logs/train_dsv4_0.log   # 109
 # ============================================================================
 set -eo pipefail
 

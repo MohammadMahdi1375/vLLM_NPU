@@ -481,7 +481,8 @@ def load_and_preprocess_dataset(
         )
 
     log.subsection("Loading tokenizer")
-    tokenizer = AutoTokenizer.from_pretrained(target_model_path, trust_remote_code=True)
+    from transformers import PreTrainedTokenizerFast
+    tokenizer = PreTrainedTokenizerFast.from_pretrained(target_model_path, trust_remote_code=True)
 
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
