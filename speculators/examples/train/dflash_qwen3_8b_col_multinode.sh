@@ -60,10 +60,18 @@ export NO_PROXY="$no_proxy"
 export DFLASH_TP_GATHER=1
 export HCCL_CONNECT_TIMEOUT=1800
 export TORCH_COMPILE_DISABLE=1 TORCHDYNAMO_DISABLE=1
-# If cross-node rendezvous can't find the route, set these to the host NIC on the
-# 80.5.5.0/24 network (find via `ip -o addr`):
-# export GLOO_SOCKET_IFNAME=eth0
-# export HCCL_SOCKET_IFNAME=eth0
+# Cross-node gloo/HCCL MUST bind to the routable NIC, not loopback. Both nodes are
+# named "localhost" (resolves to ::1), which is why ranks tried to reach [::1] and got
+# "Connection refused". Auto-detect the interface carrying the 80.5.5.x address here:
+NET_IFACE="$(ip -o -4 addr show | awk '/80\.5\.5\./{print $2; exit}')"
+if [ -z "$NET_IFACE" ]; then
+    echo "ERROR: no NIC with an 80.5.5.x address on this node. Run 'ip -o -4 addr show'"
+    echo "       and set NET_IFACE manually below."; exit 1
+fi
+echo "[node $NODE_RANK] binding distributed traffic to NIC: $NET_IFACE ($(ip -o -4 addr show dev "$NET_IFACE" | awk '{print $4}'))"
+export GLOO_SOCKET_IFNAME="$NET_IFACE"
+export HCCL_SOCKET_IFNAME="$NET_IFACE"
+export TP_SOCKET_IFNAME="$NET_IFACE"
 
 cd /home/n84449292/m84379596/DFlash/vLLM_NPU/speculators
 
