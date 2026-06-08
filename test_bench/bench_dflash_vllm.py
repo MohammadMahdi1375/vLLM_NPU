@@ -46,6 +46,16 @@ DATASETS = {
             f"passes the tests:\n```python\n{x['prompt']}\n```"
         ),
     },
+    # MT-Bench. The HF dataset stores `prompt` as a LIST of turns (it's the one
+    # multi-turn benchmark). z-lab's server benchmark (_run_server) does NOT replay
+    # the conversation — it uses only `turns[0]`. We match that here by taking the
+    # first turn, so numbers line up with z-lab's vLLM/SGLang results and flow through
+    # the same single-turn streaming + /metrics path as the other datasets.
+    "mt-bench": {
+        "load_args": ("HuggingFaceH4/mt_bench_prompts",),
+        "split": "train",
+        "format": lambda x: x["prompt"][0],
+    },
 }
 
 
