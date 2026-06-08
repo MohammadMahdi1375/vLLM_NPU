@@ -483,7 +483,6 @@ class Compressor(nn.Module):
         super().__init__()
         self.vllm_config = vllm_config
         self.config = config
-        self._replicate_attn = (tp_size > config.o_groups) and not enable_dsa_cp()  # Moh_7596
         self.dim = config.hidden_size
         self.head_dim = head_dim
         self.rope_head_dim = config.qk_rope_head_dim
