@@ -483,6 +483,7 @@ class Compressor(nn.Module):
         super().__init__()
         self.vllm_config = vllm_config
         self.config = config
+        self._replicate_attn = (tp_size > config.o_groups) and not enable_dsa_cp()  # Moh_7596
         self.dim = config.hidden_size
         self.head_dim = head_dim
         self.rope_head_dim = config.qk_rope_head_dim
@@ -594,16 +595,17 @@ class DeepseekV4Attention(nn.Module):
         self.layer_idx = layer_idx
         config_layer_idx = extract_dsv4_layer_index(config, prefix)
         tp_size = get_tensor_model_parallel_world_size()
+        self._replicate_attn = (tp_size > config.o_groups) and not enable_dsa_cp()  # Moh_7596
         self.dim = config.hidden_size
         self.n_heads = config.num_attention_heads
-        self.n_local_heads = config.num_attention_heads // tp_size
+        self.n_local_heads = config.num_attention_heads if self._replicate_attn else config.num_attention_heads // tp_size  # Moh_7596
         self.q_lora_rank = config.q_lora_rank
         self.o_lora_rank = config.o_lora_rank
         self.head_dim = config.head_dim
         self.rope_head_dim = config.qk_rope_head_dim
         self.nope_head_dim = config.head_dim - config.qk_rope_head_dim
         self.n_groups = config.o_groups
-        self.n_local_groups = self.n_groups // tp_size
+        self.n_local_groups = self.n_groups if self._replicate_attn else self.n_groups // tp_size  # Moh_7596
         self.window_size = config.sliding_window
         self.eps = config.rms_norm_eps
         self.norm_eps = config.rms_norm_eps
@@ -621,7 +623,7 @@ class DeepseekV4Attention(nn.Module):
             return_bias=False,
         )
         self.q_norm = RMSNorm(self.q_lora_rank, eps=config.rms_norm_eps)
-        wq_b_cls = ReplicatedLinear if self.enable_dsa_cp else ColumnParallelLinear
+        wq_b_cls = ReplicatedLinear if (self.enable_dsa_cp or self._replicate_attn) else ColumnParallelLinear  # Moh_7596
         self.wq_b = wq_b_cls(
             self.q_lora_rank,
             self.n_heads * self.head_dim,
@@ -646,6 +648,7 @@ class DeepseekV4Attention(nn.Module):
             bias=False,
             quant_config=quant_config,
             prefix=f"{prefix}.wo_a",
+            disable_tp=self._replicate_attn,  # Moh_7596
             return_bias=False,
         )
         self.wo_b = RowParallelLinear(
@@ -654,6 +657,7 @@ class DeepseekV4Attention(nn.Module):
             bias=False,
             quant_config=quant_config,
             prefix=f"{prefix}.wo_b",
+            disable_tp=self._replicate_attn,  # Moh_7596
             return_bias=False,
         )
         self.compress_ratio = get_dsv4_compress_ratio(config, config_layer_idx)
