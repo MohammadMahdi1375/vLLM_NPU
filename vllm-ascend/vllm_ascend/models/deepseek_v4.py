@@ -1206,7 +1206,7 @@ class AscendDeepseekV4ForCausalLM(nn.Module, SupportsPP, DeepseekV2MixtureOfExpe
 
             if "sink" in name:
                 param = params_dict[name]
-                if enable_dsa_cp():
+                if enable_dsa_cp() or param.shape[0] == loaded_weight.shape[0]:  # Moh_7596
                     param.data.copy_(loaded_weight)
                 else:
                     # Handle attention sinks (distributed across ranks)
