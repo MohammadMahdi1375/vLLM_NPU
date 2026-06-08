@@ -113,7 +113,7 @@ ASCEND_RT_VISIBLE_DEVICES="$LOCAL_NPUS" torchrun \
     --in-process-target \
     --target-tp-size "$TARGET_TP_SIZE" \
     --enable-expert-parallel \
-    --gpu-memory-utilization 0.6 \
+    --gpu-memory-utilization 0.8 \
     --shared-storage-path "$SHARED_STORAGE_PATH" \
     --verifier-name-or-path "$MODEL" \
     --data-path "$DATA_OUT" \
