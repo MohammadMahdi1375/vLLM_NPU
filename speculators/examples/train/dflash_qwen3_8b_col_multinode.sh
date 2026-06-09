@@ -30,7 +30,7 @@ CHILD_IP="80.5.5.109"
 MASTER_PORT=29500
 NNODES=2
 NPROC_PER_NODE=8
-TARGET_TP_SIZE=16
+TARGET_TP_SIZE=1
 LOCAL_NPUS="0,1,2,3,4,5,6,7"
 
 MODEL="/share/canada_group_folder/ckpt/Qwen3-8B"                              # shared, read-only OK
