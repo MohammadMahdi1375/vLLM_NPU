@@ -15,7 +15,7 @@
 #     [node 1] DATA_FINGERPRINT: <hash>
 # from the two logs. They MUST be identical. If they differ, prepare_data is
 # non-deterministic (shuffling) — stop and we pin its seed, or rsync node 0's
-# copy to node 1 instead (see note at the bottom).
+# copy to node 1 instead (see note at the bottom)
 
 #*************************** How to Run? ***************************#
 # cd ./speculators
