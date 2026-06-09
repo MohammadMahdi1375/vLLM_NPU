@@ -981,7 +981,7 @@ class DeepseekV4Model(nn.Module):
         aux_hidden_states = []  # Moh_7596
         for idx, layer in enumerate(islice(self.layers, self.start_layer, self.end_layer), start=self.start_layer):  # Moh_7596
             if idx in _aux:  # Moh_7596
-                aux_hidden_states.append((hidden_states if residual is None else hidden_states + residual).flatten(1))  # Moh_7596
+                aux_hidden_states.append((hidden_states if residual is None else hidden_states + residual).mean(dim=1))  # Moh_7596
             hidden_states, residual = layer(positions, hidden_states, residual, llama_4_scaling)
 
         # Stash pre-hc_head residual for the MTP draft (captured copy_).

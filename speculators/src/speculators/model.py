@@ -144,12 +144,12 @@ class DraftVocabMixin(nn.Module):
             return
 
         verifier_weights = load_model_layers(
-            ["embed_tokens.weight", "lm_head.weight"],
+            ["embed_tokens.weight", "embed.weight", "lm_head.weight", "head.weight"],
             verifier_config.name_or_path,
         )
 
-        embed_tokens_weight = verifier_weights["embed_tokens.weight"]
-        lm_head_weight = verifier_weights.get("lm_head.weight", embed_tokens_weight)
+        embed_tokens_weight = verifier_weights["embed_tokens.weight"] if "embed_tokens.weight" in verifier_weights else verifier_weights["embed.weight"]
+        lm_head_weight = verifier_weights["lm_head.weight"] if "lm_head.weight" in verifier_weights else verifier_weights.get("head.weight", embed_tokens_weight)
 
         # Load embed_tokens if not already loaded (NaN means uninitialized)
         if self.embed_tokens.weight.isnan().any():

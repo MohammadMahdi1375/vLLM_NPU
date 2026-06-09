@@ -65,6 +65,10 @@ TARGET_LAYER_IDS="41"
 export no_proxy="localhost,127.0.0.1,::1,${PARENT_IP},${CHILD_IP}"
 export NO_PROXY="$no_proxy"
 export DFLASH_TP_GATHER=1
+export ASCEND_LAUNCH_BLOCKING=1
+export ASCEND_LAUNCH_BLOCKING=1
+export ASCEND_SLOG_PRINT_TO_STDOUT=1   # Moh debug: device errors → stdout
+export ASCEND_GLOBAL_LOG_LEVEL=3       # ERROR level (3); plog grep found nothing, so route inline
 export HCCL_CONNECT_TIMEOUT=1800
 export TORCH_COMPILE_DISABLE=1 TORCHDYNAMO_DISABLE=1
 # Cross-node gloo/HCCL MUST bind to the routable NIC, not loopback. Both nodes are

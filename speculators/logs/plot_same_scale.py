@@ -13,6 +13,8 @@ Usage:
       --speculator colo=logs/colo.log sep=logs/sep.log \
       --specforge  sf=logs/specforge.log \
       --xaxis epoch --smoothing 0.9 --out dflash_compare.png
+
+python plot_same_scale.py --speculator colocate=train_colocate.log separate=train_separate.log --specforge  sf=train_specforge.log --xaxis epoch --smoothing 0.9 --out dflash_compare.png
 """
 import argparse
 import json

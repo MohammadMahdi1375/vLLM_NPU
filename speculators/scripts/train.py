@@ -142,7 +142,7 @@ def create_transformer_layer_config(
     return config_class(
         vocab_size=verifier_config.vocab_size,
         hidden_size=verifier_config.hidden_size,
-        intermediate_size=verifier_config.intermediate_size,
+        intermediate_size=getattr(verifier_config, "intermediate_size", None) or verifier_config.moe_intermediate_size,
         num_hidden_layers=num_layers,
         num_attention_heads=verifier_config.num_attention_heads,
         num_key_value_heads=verifier_config.num_key_value_heads,
@@ -283,11 +283,12 @@ def main(args: argparse.Namespace):
                 _vcfg = _CfgShim(_json.load(_cf))
         _vcfg = getattr(_vcfg, 'text_config', _vcfg)
         _n = _vcfg.num_hidden_layers
-        _tlids = list(args.target_layer_ids) if args.target_layer_ids else [2, _n // 2, _n - 3]
+        _tlids = [i for i in (list(args.target_layer_ids) if args.target_layer_ids else [2, _n // 2, _n - 3]) if 0 <= i < _n]  # Moh_7596 drop OOR aux ids
         if _n not in _tlids: _tlids.append(_n)
         _spec = {'method': 'extract_hidden_states', 'num_speculative_tokens': 1, 'draft_model_config': {'hf_config': {'eagle_aux_hidden_state_layer_ids': _tlids}}}
         _kv = {'kv_connector': 'ExampleHiddenStatesConnector', 'kv_role': 'kv_producer', 'kv_connector_extra_config': {'shared_storage_path': args.shared_storage_path}}
-        engine = LLM(model=args.verifier_name_or_path, tensor_parallel_size=args.target_tp_size, enable_expert_parallel=args.enable_expert_parallel, distributed_executor_backend='external_launcher', enforce_eager=True, trust_remote_code=getattr(args, 'trust_remote_code', True), seed=args.seed, speculative_config=_spec, kv_transfer_config=_kv, enable_chunked_prefill=False, gpu_memory_utilization=args.gpu_memory_utilization, max_model_len=3072)
+        import vllm.v1.core.single_type_kv_cache_manager as _stm; import vllm_ascend.patch.platform.patch_kv_cache_interface as _pkc; [_stm.spec_manager_map.setdefault(_A.__mro__[1], _stm.spec_manager_map[_A]) for _A in (_pkc.AscendMLAAttentionSpec, _pkc.AscendSlidingWindowMLASpec) if _A in _stm.spec_manager_map]  # Moh_7596 stock-spec-register
+        engine = LLM(model=args.verifier_name_or_path, tensor_parallel_size=args.target_tp_size, enable_expert_parallel=args.enable_expert_parallel, distributed_executor_backend='external_launcher', enforce_eager=True, trust_remote_code=getattr(args, 'trust_remote_code', True), seed=args.seed, speculative_config=_spec, kv_transfer_config=_kv, enable_chunked_prefill=False, gpu_memory_utilization=args.gpu_memory_utilization, max_model_len=4096)
         args.num_workers = 0
 
     d2t, t2d, draft_vocab_size = parse_vocab_mappings(args)
