@@ -29,6 +29,16 @@ NODE_RANK="${1:?usage: bash dflash_colo_2node.sh <node_rank 0|1>   (0=parent, 1=
 source /home/n84449292/m84379596/CANN/CANN9.0.0/ascend-toolkit/set_env.sh
 source /home/n84449292/m84379596/CANN/CANN9.0.0/nnal/atb/set_env.sh
 
+export HCCL_BUFFSIZE=128
+export VLLM_ASCEND_APPLY_DSV4_PATCH=1
+unset VLLM_ASCEND_ENABLE_FLASHCOMM1
+
+export TASK_QUEUE_ENABLE=1
+export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
+
+# Smoke-test only: bypass npu_quant_lightning_indexer in dsa_v1.py.
+export DFLASH_DISABLE_QLI=1
+
 # ===================== CONFIG (identical on both nodes) =====================
 PARENT_IP="80.5.5.108"        # = MASTER_ADDR (node 0)
 CHILD_IP="80.5.5.109"
@@ -47,7 +57,7 @@ DATA_OUT="/home/n84449292/m84379596/dflash_dsv4_col_multinode"
 SHARED_STORAGE_PATH="/dev/shm/hidden_states"
 
 MAX_SAMPLES=10000
-SEQ_LENGTH=3072
+SEQ_LENGTH=512
 EPOCHS=1
 LR=6e-4
 SEED=42
@@ -55,7 +65,7 @@ SPECULATOR_TYPE="dflash"
 BLOCK_SIZE=16
 MAX_ANCHORS=512
 VERIFIER_VOCAB=129280
-DRAFT_VOCAB_SIZE=129280
+DRAFT_VOCAB_SIZE=32768
 NUM_LAYERS=1
 TARGET_LAYER_IDS="41"
 # VOCAB: full 151936 (matches SpecForge) — needs the model.py full-vocab patch;
@@ -117,7 +127,7 @@ ASCEND_RT_VISIBLE_DEVICES="$LOCAL_NPUS" torchrun \
     --in-process-target \
     --target-tp-size "$TARGET_TP_SIZE" \
     --enable-expert-parallel \
-    --gpu-memory-utilization 0.8 \
+    --gpu-memory-utilization 0.75 \
     --shared-storage-path "$SHARED_STORAGE_PATH" \
     --verifier-name-or-path "$MODEL" \
     --data-path "$DATA_OUT" \
@@ -125,6 +135,7 @@ ASCEND_RT_VISIBLE_DEVICES="$LOCAL_NPUS" torchrun \
     --epochs "$EPOCHS" \
     --lr "$LR" \
     --total-seq-len "$SEQ_LENGTH" \
+    --draft-vocab-size "$DRAFT_VOCAB_SIZE" \
     --speculator-type "$SPECULATOR_TYPE" \
     --block-size "$BLOCK_SIZE" \
     --max-anchors "$MAX_ANCHORS" \
@@ -141,6 +152,7 @@ ASCEND_RT_VISIBLE_DEVICES="$LOCAL_NPUS" torchrun \
     --on-missing generate \
     --on-generate delete \
     --log-freq 10 \
+    --no-resume-from-checkpoint \
     --seed "$SEED"
 
 echo "[node $NODE_RANK] done. Checkpoints (on node 0's local home): $DATA_OUT/checkpoints/"

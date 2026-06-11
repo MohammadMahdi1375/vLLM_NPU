@@ -286,9 +286,57 @@ def main(args: argparse.Namespace):
         _tlids = [i for i in (list(args.target_layer_ids) if args.target_layer_ids else [2, _n // 2, _n - 3]) if 0 <= i < _n]  # Moh_7596 drop OOR aux ids
         if _n not in _tlids: _tlids.append(_n)
         _spec = {'method': 'extract_hidden_states', 'num_speculative_tokens': 1, 'draft_model_config': {'hf_config': {'eagle_aux_hidden_state_layer_ids': _tlids}}}
-        _kv = {'kv_connector': 'ExampleHiddenStatesConnector', 'kv_role': 'kv_producer', 'kv_connector_extra_config': {'shared_storage_path': args.shared_storage_path}}
+        _kv = {'kv_connector': 'ExampleHiddenStatesConnector', 'kv_role': 'kv_producer', 'kv_buffer_size': 128 * 1024 * 1024, 'kv_connector_extra_config': {'shared_storage_path': args.shared_storage_path}}
         import vllm.v1.core.single_type_kv_cache_manager as _stm; import vllm_ascend.patch.platform.patch_kv_cache_interface as _pkc; [_stm.spec_manager_map.setdefault(_A.__mro__[1], _stm.spec_manager_map[_A]) for _A in (_pkc.AscendMLAAttentionSpec, _pkc.AscendSlidingWindowMLASpec) if _A in _stm.spec_manager_map]  # Moh_7596 stock-spec-register
-        engine = LLM(model=args.verifier_name_or_path, tensor_parallel_size=args.target_tp_size, enable_expert_parallel=args.enable_expert_parallel, distributed_executor_backend='external_launcher', enforce_eager=True, trust_remote_code=getattr(args, 'trust_remote_code', True), seed=args.seed, speculative_config=_spec, kv_transfer_config=_kv, enable_chunked_prefill=False, gpu_memory_utilization=args.gpu_memory_utilization, max_model_len=4096)
+        # DeepSeek-V4 DSA/QLI is block-oriented. Do not use max_model_len=seq+1
+        # directly, because 2049 is not block-aligned. Also restrict the
+        # in-process target to one long prefill request per scheduler step to
+        # avoid QuantLightningIndexer AICore failures on 2 x 2048-token prefills.
+        dsa_block_size = 128
+        target_max_model_len = (
+            ((args.total_seq_len + 1 + dsa_block_size - 1) // dsa_block_size)
+            * dsa_block_size
+        )
+        if rank == 0:
+            print(
+                f"[DFLASH] vLLM target max_model_len={target_max_model_len} "
+                f"for total_seq_len={args.total_seq_len}, block_size={dsa_block_size}",
+                flush=True,
+            )
+
+        # DeepSeek-V4 / Ascend-safe target-engine settings for DFlash.
+        # Need +1 because vLLM generate() validates prompt_len + max_tokens.
+        # Need 128 alignment and single-sequence scheduling to avoid DSA/QLI crashes.
+        dsa_block_size = 128
+        target_max_model_len = (
+            ((args.total_seq_len + 1 + dsa_block_size - 1) // dsa_block_size)
+            * dsa_block_size
+        )
+        if rank == 0:
+            print(
+                f"[DFLASH] vLLM target max_model_len={target_max_model_len} "
+                f"for total_seq_len={args.total_seq_len}, block_size={dsa_block_size}",
+                flush=True,
+            )
+
+        engine = LLM(
+            model=args.verifier_name_or_path,
+            tensor_parallel_size=args.target_tp_size,
+            enable_expert_parallel=args.enable_expert_parallel,
+            distributed_executor_backend="external_launcher",
+            enforce_eager=True,
+            trust_remote_code=getattr(args, "trust_remote_code", True),
+            seed=args.seed,
+            speculative_config=_spec,
+            kv_transfer_config=_kv,
+            enable_chunked_prefill=False,
+            gpu_memory_utilization=args.gpu_memory_utilization,
+            max_model_len=target_max_model_len,
+            block_size=dsa_block_size,
+            max_num_seqs=1,
+            max_num_batched_tokens=target_max_model_len,
+            enable_prefix_caching=False,
+        )
         args.num_workers = 0
 
     d2t, t2d, draft_vocab_size = parse_vocab_mappings(args)
@@ -315,6 +363,11 @@ def main(args: argparse.Namespace):
         )
 
     model_class = registry[args.speculator_type]
+    # Re-seed immediately before draft model initialization. This keeps
+    # scratch initialization identical across ranks when Trainer skips
+    # the rank-0 full-state broadcast.
+    set_seed(args.seed, args.deterministic_cuda)
+
     if args.from_pretrained:
         draft_model = model_class.from_pretrained(
             args.from_pretrained, t2d=t2d, d2t=d2t

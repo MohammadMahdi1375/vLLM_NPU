@@ -126,28 +126,17 @@ class Trainer:
             return
 
         # Distributed case
-        # Capture full state dict on rank 0 before FSDP sharding
-        full_state_dict = {}
-        if not load_checkpoint and dist.get_rank() == 0:
-            full_state_dict = self.model.state_dict()
-
+        #
+        # Fresh scratch training: avoid the rank-0 full-state broadcast.
+        # In the 2-node co-located DSV4 run, this Gloo object-broadcast
+        # path can fail as 'Connection closed by peer'. All ranks are
+        # re-seeded before draft model initialization in scripts/train.py.
         apply_fully_sharded(self.model)
 
         if load_checkpoint:
             self.checkpointer.load_model_state_dict(self.model)
-        else:
-            # Broadcast full state dict from rank 0 to all ranks
-            set_model_state_dict(
-                self.model,
-                full_state_dict,
-                options=StateDictOptions(
-                    full_state_dict=True,
-                    broadcast_from_rank0=True,
-                    strict=False,
-                ),
-            )
-            del full_state_dict
-            dist.barrier()
+
+        dist.barrier()
 
     def setup_optimizer(self):
         # Setup optimizer
@@ -285,10 +274,33 @@ class Trainer:
         outs = engine.generate(prompts, sp, use_tqdm=False) if prompts else []
         my_outs = outs[my_offset:my_offset + my_count]
         samples = []
+        loaded_paths = []
         for j, o in enumerate(my_outs):
             kvp = getattr(o, "kv_transfer_params", None)
             path = kvp.get("hidden_states_path") if isinstance(kvp, dict) else None
+            if not path:
+                raise RuntimeError(f"Missing hidden_states_path in kv_transfer_params: {kvp}")
+
+            # The hidden-state connector writes to /dev/shm. On Ascend + multi-rank
+            # runs, make loading robust to small file visibility delays.
+            import time as _time
+            for _attempt in range(200):
+                if _os.path.exists(path):
+                    break
+                _time.sleep(0.05)
+            else:
+                parent = _os.path.dirname(path)
+                try:
+                    existing = sorted(_os.listdir(parent))[:30]
+                except Exception as exc:
+                    existing = [f"<could not list {parent}: {exc}>"]
+                raise FileNotFoundError(
+                    f"Hidden-state file was not found before load: {path}. "
+                    f"First files in directory: {existing}"
+                )
+
             loaded = load_file(path)
+            loaded_paths.append(path)
             hs = loaded["hidden_states"]
             seq = int(loaded["token_ids"].shape[0])
             sample = {
@@ -302,14 +314,24 @@ class Trainer:
             if transform:
                 sample = transform(sample)
             samples.append(sample)
-        for o in outs:
-            kvp = getattr(o, "kv_transfer_params", None)
-            pth = kvp.get("hidden_states_path") if isinstance(kvp, dict) else None
-            if pth:
+        # Do not delete every path from `outs`.
+        # Every rank calls engine.generate() with the global prompt list, but each
+        # rank only consumes its own `my_outs`. Deleting all `outs` races with
+        # other ranks that may not have loaded their files yet.
+        if dist.is_initialized():
+            dist.barrier()
+
+        if getattr(self.config, "on_generate", "delete") == "delete":
+            for path in loaded_paths:
                 try:
-                    _os.unlink(pth)
-                except OSError:
+                    if path and _os.path.exists(path):
+                        _os.remove(path)
+                except FileNotFoundError:
                     pass
+
+        if dist.is_initialized():
+            dist.barrier()
+
         return collate(samples)
 
     @torch.no_grad()

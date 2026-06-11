@@ -1934,6 +1934,15 @@ class AscendDSAImpl(DSAAttentionImpl):
                 prefill_num_tokens = hidden_states.shape[0]
                 if self.skip_topk:
                     compress_topk_idxs = self._get_indexcache_topk_indices(prefill_num_tokens, offset=prefill_offset)
+                elif __import__("os").environ.get("DFLASH_DISABLE_QLI", "0") == "1":
+                    # DFlash smoke-test fallback: avoid npu_quant_lightning_indexer.
+                    # This is not quality-equivalent to real QLI top-k selection.
+                    # Shape follows the existing IndexCache path: [tokens, 1, topk].
+                    compress_topk_idxs = torch.zeros(
+                        (prefill_num_tokens, 1, self.index_topk),
+                        dtype=torch.int32,
+                        device=hidden_states.device,
+                    )
                 else:
                     if self.multistream_dsv4_dsa_overlap:
                         indexer_q = self.cv_indexer_select_qli(  # multistream version
@@ -2225,6 +2234,14 @@ class AscendDSAImpl(DSAAttentionImpl):
                 decode_num_tokens = hidden_states.shape[0]
                 if self.skip_topk:
                     compress_topk_idxs = self._get_indexcache_topk_indices(decode_num_tokens, offset=0)
+                elif __import__("os").environ.get("DFLASH_DISABLE_QLI", "0") == "1":
+                    # DFlash smoke-test fallback: avoid npu_quant_lightning_indexer.
+                    # This is not quality-equivalent to real QLI top-k selection.
+                    compress_topk_idxs = torch.zeros(
+                        (decode_num_tokens, 1, self.index_topk),
+                        dtype=torch.int32,
+                        device=hidden_states.device,
+                    )
                 else:
                     if self.multistream_dsv4_dsa_overlap:
                         indexer_q = self.cv_indexer_select_qli(  # multistream version
