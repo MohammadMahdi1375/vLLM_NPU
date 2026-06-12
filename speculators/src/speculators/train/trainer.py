@@ -244,46 +244,67 @@ class Trainer:
 
     def _tp_gather_generate_scatter(self, batch):
         import os as _os
+        import time as _time
         from safetensors.torch import load_file
         from vllm import SamplingParams
+
         dataset = self.train_loader.dataset
         engine = dataset.engine
         seed = getattr(dataset, "seed", 42)
         hsd = self.config.hidden_states_dtype
         transform = getattr(dataset, "transform", None)
         collate = self.train_loader.collate_fn
+
         lengths = [int(x) for x in batch["lengths"].tolist()]
         ids_flat = batch["input_ids"].reshape(-1)
         lm_flat = batch["loss_mask"].reshape(-1)
+
         local_tokens, local_lossmask = [], []
         off = 0
         for L in lengths:
             local_tokens.append([int(t) for t in ids_flat[off:off + L].tolist()])
             local_lossmask.append(lm_flat[off:off + L].clone())
             off += L
+
         world = dist.get_world_size()
         gathered = [None] * world
         dist.all_gather_object(gathered, local_tokens)
+
         counts = [len(gathered[r]) for r in range(world)]
         global_tokens = [t for r in range(world) for t in gathered[r]]
+
         my_rank = dist.get_rank()
         my_offset = sum(counts[:my_rank])
         my_count = counts[my_rank]
+
         prompts = [{"prompt_token_ids": t} for t in global_tokens]
         sp = SamplingParams(max_tokens=1, temperature=0.0, seed=seed)
+
         outs = engine.generate(prompts, sp, use_tqdm=False) if prompts else []
+
+        # Important:
+        # Every rank calls engine.generate() with the full global prompt list.
+        # On each node, that can create local hidden-state files for all prompts.
+        # We must delete all paths returned by this local generate() call, not only
+        # this rank's my_outs slice, otherwise /dev/shm/hidden_states grows forever.
+        all_out_paths = []
+        for o in outs:
+            kvp = getattr(o, "kv_transfer_params", None)
+            path = kvp.get("hidden_states_path") if isinstance(kvp, dict) else None
+            if path:
+                all_out_paths.append(path)
+
         my_outs = outs[my_offset:my_offset + my_count]
+
         samples = []
-        loaded_paths = []
         for j, o in enumerate(my_outs):
             kvp = getattr(o, "kv_transfer_params", None)
             path = kvp.get("hidden_states_path") if isinstance(kvp, dict) else None
             if not path:
                 raise RuntimeError(f"Missing hidden_states_path in kv_transfer_params: {kvp}")
 
-            # The hidden-state connector writes to /dev/shm. On Ascend + multi-rank
-            # runs, make loading robust to small file visibility delays.
-            import time as _time
+            # The hidden-state connector writes to /dev/shm. Wait briefly for the
+            # file to become visible before loading.
             for _attempt in range(200):
                 if _os.path.exists(path):
                     break
@@ -300,9 +321,9 @@ class Trainer:
                 )
 
             loaded = load_file(path)
-            loaded_paths.append(path)
             hs = loaded["hidden_states"]
             seq = int(loaded["token_ids"].shape[0])
+
             sample = {
                 "hidden_states": hs[:, :-1].flatten(1).to(hsd),
                 "input_ids": loaded["token_ids"],
@@ -311,23 +332,37 @@ class Trainer:
                 "lengths": torch.tensor([seq], dtype=torch.long),
                 "position_ids": torch.arange(seq, dtype=torch.long),
             }
+
             if transform:
                 sample = transform(sample)
+
             samples.append(sample)
-        # Do not delete every path from `outs`.
-        # Every rank calls engine.generate() with the global prompt list, but each
-        # rank only consumes its own `my_outs`. Deleting all `outs` races with
-        # other ranks that may not have loaded their files yet.
+
+        # All ranks must finish loading their own slice before any rank deletes
+        # generated hidden-state files. This avoids the previous FileNotFoundError.
         if dist.is_initialized():
             dist.barrier()
 
+        # Delete all files created by this rank's local engine.generate() call.
+        # Multiple ranks on the same node may try to delete the same files; that is
+        # fine because FileNotFoundError is ignored.
         if getattr(self.config, "on_generate", "delete") == "delete":
-            for path in loaded_paths:
+            deleted = 0
+            for path in all_out_paths:
                 try:
                     if path and _os.path.exists(path):
                         _os.remove(path)
+                        deleted += 1
                 except FileNotFoundError:
                     pass
+
+            if _os.environ.get("DFLASH_HS_DEBUG", "0") == "1":
+                print(
+                    f"[DFLASH_HS_CLEANUP] rank={my_rank} "
+                    f"my_count={my_count} outs={len(outs)} "
+                    f"all_out_paths={len(all_out_paths)} deleted={deleted}",
+                    flush=True,
+                )
 
         if dist.is_initialized():
             dist.barrier()
