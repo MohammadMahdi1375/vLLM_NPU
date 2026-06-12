@@ -44,6 +44,7 @@ class TrainerConfig(NamedTuple):
     scheduler_total_steps: int | None = None
     scheduler_num_cosine_cycles: float = 0.5
     checkpoint_freq: int = 1
+    save_steps: int = 0
     save_best: bool = False
     hidden_states_dtype: torch.dtype = torch.bfloat16
     log_freq: int = 1
@@ -211,6 +212,19 @@ class Trainer:
             if self.scheduler is not None:
                 self.scheduler.step()
 
+            # Save a checkpoint every N optimizer steps (0 disables).
+            _save_steps = getattr(self.config, "save_steps", 0)
+            if _save_steps and self.global_step > 0 and self.global_step % _save_steps == 0:
+                if (not self.is_distributed) or self.local_rank == 0:
+                    root_logger.info(
+                        f"Saving step checkpoint at global_step={self.global_step}"
+                    )
+                self.checkpointer.save_checkpoint(self.model, self.opt, self.global_step)
+                if self.scheduler is not None:
+                    self.checkpointer.save_scheduler_state_dict(
+                        self.scheduler, self.global_step
+                    )
+
             if self.global_step % self.config.log_freq == 0:
                 if self.is_distributed:
                     for v in metrics.values():
@@ -325,7 +339,7 @@ class Trainer:
             seq = int(loaded["token_ids"].shape[0])
 
             sample = {
-                "hidden_states": hs[:, :-1].flatten(1).to(hsd),
+                "hidden_states": hs.flatten(1).to(hsd),
                 "input_ids": loaded["token_ids"],
                 "verifier_last_hidden_states": hs[:, -1].to(hsd),
                 "loss_mask": local_lossmask[j],

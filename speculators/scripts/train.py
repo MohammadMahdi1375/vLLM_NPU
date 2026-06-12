@@ -284,7 +284,7 @@ def main(args: argparse.Namespace):
         _vcfg = getattr(_vcfg, 'text_config', _vcfg)
         _n = _vcfg.num_hidden_layers
         _tlids = [i for i in (list(args.target_layer_ids) if args.target_layer_ids else [2, _n // 2, _n - 3]) if 0 <= i < _n]  # Moh_7596 drop OOR aux ids
-        if _n not in _tlids: _tlids.append(_n)
+        _tlids = sorted(set(_tlids)); args.target_layer_ids = list(_tlids); print("[DFLASH] num_hidden_layers", _n, "aux_layer_ids", _tlids, "draft_fc_in", len(_tlids), flush=True)
         _spec = {'method': 'extract_hidden_states', 'num_speculative_tokens': 1, 'draft_model_config': {'hf_config': {'eagle_aux_hidden_state_layer_ids': _tlids}}}
         _kv = {'kv_connector': 'ExampleHiddenStatesConnector', 'kv_role': 'kv_producer', 'kv_buffer_size': 128 * 1024 * 1024, 'kv_connector_extra_config': {'shared_storage_path': args.shared_storage_path}}
         import vllm.v1.core.single_type_kv_cache_manager as _stm; import vllm_ascend.patch.platform.patch_kv_cache_interface as _pkc; [_stm.spec_manager_map.setdefault(_A.__mro__[1], _stm.spec_manager_map[_A]) for _A in (_pkc.AscendMLAAttentionSpec, _pkc.AscendSlidingWindowMLASpec) if _A in _stm.spec_manager_map]  # Moh_7596 stock-spec-register
@@ -473,6 +473,7 @@ def main(args: argparse.Namespace):
         scheduler_total_steps=args.scheduler_total_steps,
         scheduler_num_cosine_cycles=args.scheduler_num_cosine_cycles,
         checkpoint_freq=args.checkpoint_freq,
+        save_steps=args.save_steps,
         save_best=args.save_best,
         hidden_states_dtype=hidden_states_dtype,
         log_freq=args.log_freq,
@@ -734,6 +735,10 @@ def parse_args():
         help="Standard deviation for noise augmentation",
     )
     # Checkpoint Parameters
+    parser.add_argument(
+        "--save-steps", type=int, default=0,
+        help="Save a checkpoint every N optimizer steps (0 = only per-epoch).",
+    )
     parser.add_argument(
         "--checkpoint-freq",
         type=_checkpoint_freq,

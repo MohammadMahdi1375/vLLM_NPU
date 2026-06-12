@@ -100,7 +100,7 @@ def standardize_data_v1(data: dict[str, Any]) -> dict[str, Any]:
     # }
 
     return {
-        "hidden_states": torch.cat(data["hidden_states"][:-1], dim=-1),
+        "hidden_states": torch.cat(data["hidden_states"], dim=-1),
         "input_ids": data["input_ids"],
         "verifier_last_hidden_states": data["hidden_states"][-1],
         "loss_mask": data["loss_mask"],
