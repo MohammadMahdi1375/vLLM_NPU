@@ -95,7 +95,7 @@ DATASET="/home/n84449292/m84379596/Huggingface/datasets/open_perfectblend_full.j
 DATA_OUT="/home/n84449292/m84379596/dflash_dsv4_col_multinode"
 SHARED_STORAGE_PATH="/dev/shm/hidden_states"
 
-MAX_SAMPLES=10000
+MAX_SAMPLES=""
 SEQ_LENGTH=1024
 EPOCHS=1
 LR=6e-4
@@ -108,7 +108,7 @@ VERIFIER_VOCAB=129280
 DRAFT_VOCAB_SIZE=129280
 # DRAFT_VOCAB_SIZE=32768
 NUM_LAYERS=3
-TARGET_LAYER_IDS="0 10 21"
+TARGET_LAYER_IDS="2 20 40"
 
 # ============================================================================
 
@@ -222,11 +222,11 @@ run_train() {
         --on-missing generate \
         --on-generate delete \
         --log-freq 10 \
-        --save-steps 100 \
-        --no-resume-from-checkpoint \
+        --save-steps 1000 \
         --seed "$SEED"
 }
 # --draft-vocab-size "$DRAFT_VOCAB_SIZE" \
+# --no-resume-from-checkpoint
 if [ "$LOG_FILTER" = "1" ]; then
     # Preserve torchrun exit status while filtering high-volume known-noise lines.
     set +e
