@@ -3754,17 +3754,22 @@ class NPUModelRunner(GPUModelRunner):
                     continue
 
                 layer_names.add(layer_name)
-        if layer_names != set(kv_cache_raw_tensors.keys()):
-            missing = sorted(layer_names - set(kv_cache_raw_tensors.keys()))
-            extra = sorted(set(kv_cache_raw_tensors.keys()) - layer_names)
+        actual_layer_names = {
+            name for name in kv_cache_raw_tensors.keys()
+            if not name.endswith(".compressor.state_cache")
+        }
+
+        if layer_names != actual_layer_names:
+            missing = sorted(layer_names - actual_layer_names)
+            extra = sorted(actual_layer_names - layer_names)
             print(
-                "[DSV4_KV_DEBUG] KV cache layer mismatch\n"
-                f"expected={len(layer_names)} actual={len(kv_cache_raw_tensors)}\n"
-                f"missing_first_50={missing[:50]}\n"
+                "[DSV4_KV_DEBUG] KV cache layer mismatch\\n"
+                f"expected={len(layer_names)} actual={len(actual_layer_names)} raw_actual={len(kv_cache_raw_tensors)}\\n"
+                f"missing_first_50={missing[:50]}\\n"
                 f"extra_first_50={extra[:50]}",
                 flush=True,
             )
-        assert layer_names == set(kv_cache_raw_tensors.keys()), "Some layers are not correctly initialized"
+        assert layer_names == actual_layer_names, "Some layers are not correctly initialized"
 
         return kv_cache_raw_tensors
 
