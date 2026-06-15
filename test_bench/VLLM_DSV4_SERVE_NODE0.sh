@@ -10,6 +10,8 @@ sleep 3
 
 export PYTHONPATH=/home/n84449292/m84379596/DFlash/vLLM_NPU/vllm:/home/n84449292/m84379596/DFlash/vLLM_NPU/vllm-ascend:$PYTHONPATH
 export VLLM_USE_V1=1
+export VLLM_ASCEND_APPLY_DSV4_PATCH=1
+unset VLLM_ASCEND_ENABLE_FLASHCOMM1
 export ASCEND_RT_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 
 export MASTER_ADDR=80.5.5.108
@@ -34,5 +36,8 @@ vllm serve "$MODEL" \
   --enable-expert-parallel \
   --max-num-seqs 1 \
   --max-model-len 2048 \
+  --block-size 128 \
+  --max-num-batched-tokens 2048 \
+  --no-enable-prefix-caching \
   --host 0.0.0.0 \
   --port 30000
