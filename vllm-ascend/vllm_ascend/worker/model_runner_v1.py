@@ -3750,13 +3750,19 @@ class NPUModelRunner(GPUModelRunner):
                 # through kv_cache_raw_tensors. They are consumed separately by
                 # compressor/indexer logic and should not participate in this
                 # KV tensor allocation completeness check.
-                if layer_name.endswith(".compressor.state_cache"):
+                if (
+                    layer_name.endswith(".compressor.state_cache")
+                    and __import__("os").environ.get("DSV4_VLLM_SERVE_PATCH", "0") != "1"
+                ):
                     continue
 
                 layer_names.add(layer_name)
         actual_layer_names = {
             name for name in kv_cache_raw_tensors.keys()
-            if not name.endswith(".compressor.state_cache")
+            if (
+                __import__("os").environ.get("DSV4_VLLM_SERVE_PATCH", "0") == "1"
+                or not name.endswith(".compressor.state_cache")
+            )
         }
 
         if layer_names != actual_layer_names:
@@ -3829,7 +3835,10 @@ class NPUModelRunner(GPUModelRunner):
 
                 # DeepSeek-V4 DSA compressor/indexer state-cache metadata layers
                 # are not present in kv_cache_raw_tensors, so do not reshape them here.
-                if layer_name.endswith(".compressor.state_cache"):
+                if (
+                    layer_name.endswith(".compressor.state_cache")
+                    and __import__("os").environ.get("DSV4_VLLM_SERVE_PATCH", "0") != "1"
+                ):
                     continue
 
                 current_kv_cache_spec = layer_kv_cache_spec[layer_name]
