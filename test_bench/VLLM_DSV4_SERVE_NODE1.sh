@@ -101,4 +101,4 @@ vllm serve "$TARGET" \
   --max-num-batched-tokens 1024 \
   --block-size 128 \
   --no-enable-prefix-caching \
-  --speculative-config '{"model":"'"$DRAFT"'","num_speculative_tokens":9,"draft_tensor_parallel_size":8}'
+  --speculative-config '{"model":"'"$DRAFT"'","num_speculative_tokens":9,"draft_tensor_parallel_size":16}'
