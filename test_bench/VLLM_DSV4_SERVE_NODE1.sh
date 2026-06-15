@@ -83,7 +83,7 @@ export TP_SOCKET_IFNAME=$GLOO_SOCKET_IFNAME
 export GLOO_USE_IPV6=0
 
 TARGET=/home/n84449292/m84379596/Huggingface/DeepSeek-V4-Flash-bf16
-DRAFT=/home/n84449292/m84379596/dflash_dsv4_col_multinode/checkpoints/10000
+DRAFT=/home/n84449292/m84379596/dflash_dsv4_col_multinode/checkpoints/10000_vllm
 
 vllm serve "$TARGET" \
   --trust-remote-code \
@@ -101,4 +101,4 @@ vllm serve "$TARGET" \
   --max-num-batched-tokens 1024 \
   --block-size 128 \
   --no-enable-prefix-caching \
-  --speculative-config '{"model":"'"$DRAFT"'","num_speculative_tokens":10,"draft_tensor_parallel_size":1}'
+  --speculative-config '{"model":"'"$DRAFT"'","num_speculative_tokens":9,"draft_tensor_parallel_size":1}'
