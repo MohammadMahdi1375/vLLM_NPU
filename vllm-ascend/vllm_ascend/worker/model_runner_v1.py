@@ -3827,6 +3827,11 @@ class NPUModelRunner(GPUModelRunner):
                 if layer_name in self.runner_only_attn_layers:
                     continue
 
+                # DeepSeek-V4 DSA compressor/indexer state-cache metadata layers
+                # are not present in kv_cache_raw_tensors, so do not reshape them here.
+                if layer_name.endswith(".compressor.state_cache"):
+                    continue
+
                 current_kv_cache_spec = layer_kv_cache_spec[layer_name]
 
                 # TODO: remove this after the OOM issue is located and fixed, otherwise, some model may
