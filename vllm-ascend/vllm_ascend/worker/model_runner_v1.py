@@ -3745,6 +3745,14 @@ class NPUModelRunner(GPUModelRunner):
             for layer_name in group.layer_names:
                 if layer_name in self.runner_only_attn_layers:
                     continue
+
+                # DeepSeek-V4 DSA state-cache metadata layers are not allocated
+                # through kv_cache_raw_tensors. They are consumed separately by
+                # compressor/indexer logic and should not participate in this
+                # KV tensor allocation completeness check.
+                if layer_name.endswith(".compressor.state_cache"):
+                    continue
+
                 layer_names.add(layer_name)
         if layer_names != set(kv_cache_raw_tensors.keys()):
             missing = sorted(layer_names - set(kv_cache_raw_tensors.keys()))
