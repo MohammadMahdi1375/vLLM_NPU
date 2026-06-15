@@ -3775,7 +3775,13 @@ class NPUModelRunner(GPUModelRunner):
                 f"extra_first_50={extra[:50]}",
                 flush=True,
             )
-        assert layer_names == actual_layer_names, "Some layers are not correctly initialized"
+        assert layer_names == actual_layer_names, (
+            "Some layers are not correctly initialized; "
+            f"expected={len(layer_names)} actual={len(actual_layer_names)} "
+            f"raw_actual={len(kv_cache_raw_tensors)} "
+            f"missing_first_50={sorted(layer_names - actual_layer_names)[:50]} "
+            f"extra_first_50={sorted(actual_layer_names - layer_names)[:50]}"
+        )
 
         return kv_cache_raw_tensors
 
