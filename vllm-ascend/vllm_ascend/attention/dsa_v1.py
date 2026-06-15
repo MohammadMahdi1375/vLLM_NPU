@@ -167,6 +167,13 @@ def pad_to_blocks(x: torch.Tensor, length_list: torch.Tensor, block_size: int = 
     return out
 
 
+
+def _dsv4_serve_squeeze_minus2(x):
+    import os
+    if os.environ.get("DSV4_VLLM_SERVE_PATCH", "0") == "1" and x.dim() < 2:
+        return x
+    return x.squeeze(-2)
+
 class AscendDSABackend(AttentionBackend):
     accept_output_buffer: bool = True
 
@@ -1979,7 +1986,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 hidden_states,
                 self.compressor_wkv.weight,
                 self.compressor_wgate.weight,
-                state_cache.squeeze(-2),
+                _dsv4_serve_squeeze_minus2(state_cache),
                 self.compressor_ape,
                 self.compressor_norm.weight,
                 compress_sin.view(-1, compress_sin.shape[-1]),
@@ -2280,7 +2287,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 hidden_states,
                 self.compressor_wkv.weight,
                 self.compressor_wgate.weight,
-                state_cache.squeeze(-2),
+                _dsv4_serve_squeeze_minus2(state_cache),
                 self.compressor_ape,
                 self.compressor_norm.weight,
                 compress_sin.view(-1, compress_sin.shape[-1]),
@@ -2486,7 +2493,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             x,
             self.indexcom_wkv.weight,
             self.indexcom_wgate.weight,
-            indexer_state_cache.squeeze(-2),
+            indexer__dsv4_serve_squeeze_minus2(state_cache),
             self.indexcom_ape,
             self.indexcom_norm.weight,
             compressed_sin.view(-1, compressed_sin.shape[-1]),
@@ -2735,7 +2742,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             x,
             self.indexcom_wkv.weight,
             self.indexcom_wgate.weight,
-            indexer_state_cache.squeeze(-2),
+            indexer__dsv4_serve_squeeze_minus2(state_cache),
             self.indexcom_ape,
             self.indexcom_norm.weight,
             compressed_sin.view(-1, compressed_sin.shape[-1]),

@@ -7,6 +7,22 @@ acceptance length from the Prometheus /metrics endpoint with a before/after delt
 runs — no reloading the model.
 
 Launch the server once (see the launch command), then run this as many times as you want.
+
+cd /home/n84449292/m84379596/DFlash/vLLM_NPU
+
+MODEL=/home/n84449292/m84379596/Huggingface/DeepSeek-V4-Flash-bf16
+
+NO_PROXY="localhost,127.0.0.1" \
+no_proxy="localhost,127.0.0.1" \
+PYTHONPATH=/home/n84449292/m84379596/DFlash/vLLM_NPU/vllm:/home/n84449292/m84379596/DFlash/vLLM_NPU/vllm-ascend:$PYTHONPATH \
+python test_bench/bench_dflash_vllm.py \
+  --base-url http://127.0.0.1:30000 \
+  --model "$MODEL" \
+  --dataset gsm8k \
+  --num-prompts 128 \
+  --max-new-tokens 1024 \
+  --concurrency 1
+  
 """
 import argparse
 import random
