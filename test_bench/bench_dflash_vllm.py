@@ -187,7 +187,14 @@ def main():
     args = ap.parse_args()
 
     print(f"Loading tokenizer for {args.model}...")
-    tokenizer = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True)
+    # DeepSeek-V4 is supported by vLLM tokenizer_mode='deepseek_v4',
+    # but this local transformers version does not recognize model_type='deepseek_v4'.
+    from vllm.transformers_utils.tokenizer import get_tokenizer
+    tokenizer = get_tokenizer(
+        args.model,
+        trust_remote_code=True,
+        tokenizer_mode="deepseek_v4",
+    )
 
     if args.num_prompts is None:
         print(f"Loading FULL {args.dataset} dataset (plus {args.concurrency} warmup)...")
