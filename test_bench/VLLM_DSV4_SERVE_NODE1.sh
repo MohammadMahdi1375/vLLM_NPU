@@ -39,6 +39,7 @@ vllm serve "$MODEL" \
   --enable-expert-parallel \
   --max-num-seqs 1 \
   --max-model-len 2048 \
+  --gpu-memory-utilization 0.65 \
   --block-size 128 \
   --max-num-batched-tokens 2048 \
   --no-enable-prefix-caching \
