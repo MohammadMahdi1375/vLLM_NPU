@@ -79,6 +79,7 @@ export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
 # Smoke-test / current workaround: bypass npu_quant_lightning_indexer in dsa_v1.py.
 # Keep this only if your DFLASH_DISABLE_QLI patch is applied.
 export DFLASH_DISABLE_QLI=1
+export DSV4_VLLM_SERVE_PATCH=1
 
 # ===================== CONFIG, identical on both nodes =====================
 PARENT_IP="80.5.5.108"
@@ -223,6 +224,7 @@ run_train() {
         --on-generate delete \
         --log-freq 10 \
         --save-steps 1000 \
+        --no-resume-from-checkpoint \
         --seed "$SEED"
 }
 # --draft-vocab-size "$DRAFT_VOCAB_SIZE" \
