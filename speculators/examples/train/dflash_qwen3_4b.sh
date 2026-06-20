@@ -4,6 +4,7 @@
 # FSDP trainer on disjoint NPUs (server NPU 0, DP=1; trainer NPUs 1-7, DP=7).
 #
 # Adapted from the Qwen3-8B version. Intended differences vs that script:
+# bash examples/train/dflash_qwen3_4b.sh 2>&1 | tee logs/qwen4b_dflash.log
 #   - verifier model  : Qwen3-8B -> Qwen3-4B
 #   - dataset         : 10k subset -> open_perfectblend_full.jsonl (10k samples)
 #   - NPU split       : 4 server / 4 trainer -> 1 server / 7 trainer
@@ -38,18 +39,26 @@ MODEL="/home/n84449292/m84379596/Huggingface/models--Qwen--Qwen3-4B/snapshots/1c
 DATASET="/home/n84449292/m84379596/Huggingface/datasets/open_perfectblend_full.jsonl"
 OUTPUT_DIR="./output/dflash_separate_qwen3_4b"
 VLLM_PORT=8000
-MAX_SAMPLES=10000
-SEQ_LENGTH=3072            # per-sample max length used by prepare_data
+MAX_SAMPLES=1420909
 
-# ---- "Batch size" lever ----------------------------------------------------
-# This trainer has NO --batch-size flag. It packs samples by a TOKEN BUDGET per
-# rank (--total-seq-len) via MultipackDistributedBatchSamplerV2. So the number of
-# sequences per rank per step = TOTAL_SEQ_LEN / avg_sample_len  (variable).
-# To leave room for ~TARGET_BATCH samples per rank, budget = TARGET_BATCH * the
-# per-sample cap. With short samples you'll fit MORE than TARGET_BATCH; this sets
-# headroom, not a hard count. Must be >= SEQ_LENGTH or long samples get clipped.
-TARGET_BATCH=4                                  # desired ~sequences per rank per step
-TOTAL_SEQ_LEN=$(( SEQ_LENGTH * TARGET_BATCH ))  # = 12288 tokens/rank budget
+# ---- Sequence lengths -------------------------------------------------------
+# PREP_SEQ_LEN caps each sample in prepare_data. The open-perfectblend convs run
+# up to ~4.3k tokens, so 3072 was TRUNCATING the assistant turn (cause of the
+# "No assistant response spans found" warnings). 8192 keeps them intact with
+# headroom. (Qwen3-4B supports up to 40960 positions.)
+PREP_SEQ_LEN=3072
+# vLLM must be able to serve hidden states for the longest sample, so its
+# --max-model-len MUST be >= PREP_SEQ_LEN in online mode.
+VLLM_MAX_MODEL_LEN=$((PREP_SEQ_LEN + 256))
+
+# ---- "Batch size" lever (token-budget multipack) ----------------------------
+# This trainer has NO --batch-size flag. Each rank fills a batch up to
+# TOTAL_SEQ_LEN tokens (MultipackDistributedBatchSamplerV2), so sequences/rank =
+# TOTAL_SEQ_LEN / AVG_sample_len -- a VARIABLE count, not a fixed number. Your
+# samples are mostly far shorter than PREP_SEQ_LEN, so you'll typically pack
+# several per rank at the value below. Raise it for bigger batches (watch trainer
+# memory); must be >= PREP_SEQ_LEN so a max-length sample still fits in a batch.
+TOTAL_SEQ_LEN=3072
 EPOCHS=1
 LR=6e-4
 SEED=42
@@ -168,10 +177,10 @@ epochs                 : $EPOCHS
 seed                   : $SEED
 data_parallel (ranks)  : $NUM_TRAIN_NPUS  (FSDP, one packed micro-batch per rank)
 batch policy           : token-budgeted multipack, NOT a fixed sample count
-  per-sample max len   : $SEQ_LENGTH tokens (prepare_data --seq-length)
-  batch_max_length     : $TOTAL_SEQ_LEN tokens PER RANK (= --total-seq-len) -> headroom for ~$TARGET_BATCH x $SEQ_LENGTH-token samples
+  per-sample max len   : $PREP_SEQ_LEN tokens (prepare_data --seq-length)
+  batch_max_length     : $TOTAL_SEQ_LEN tokens PER RANK (= --total-seq-len)
   ~tokens / opt step   : ~$TOKENS_PER_STEP  ($TOTAL_SEQ_LEN x $NUM_TRAIN_NPUS ranks)
-  seqs / rank / step   : ~$TARGET_BATCH if samples are near max len; MORE if shorter (variable)
+  seqs / rank / step   : variable = TOTAL_SEQ_LEN / avg_sample_len (mostly several, since samples << cap)
 gradient_accumulation  : 1  (no accumulation; step every micro-batch)  [fixed in trainer]
 grad_clip_max_norm     : 1.0  [fixed in trainer.py, not exposed]
 noise_std              : 0.0  (default is 0.05)
@@ -188,7 +197,7 @@ python scripts/prepare_data.py \
     --data "$DATASET" \
     --output "$OUTPUT_DIR" \
     --max-samples "$MAX_SAMPLES" \
-    --seq-length "$SEQ_LENGTH" \
+    --seq-length "$PREP_SEQ_LEN" \
     --overwrite
 
 # Drop stale vocab mappings from any prior run so they REGENERATE at the
@@ -196,19 +205,46 @@ python scripts/prepare_data.py \
 rm -f "$OUTPUT_DIR"/d2t.npy "$OUTPUT_DIR"/t2d.npy
 
 echo "=== Step 2: launch vLLM server (NPUs $VLLM_NPUS, DP=$VLLM_DP) ==="
+mkdir -p "$OUTPUT_DIR"
+VLLM_LOG="$OUTPUT_DIR/vllm_server.log"
+echo "vLLM output -> $VLLM_LOG"
+# Tee vLLM output to its own log AND to our stdout so it shows up in the run log.
 ASCEND_RT_VISIBLE_DEVICES="$VLLM_NPUS" python scripts/launch_vllm.py "$MODEL" \
     --target-layer-ids $TARGET_LAYER_IDS \
     -- --data-parallel-size "$VLLM_DP" \
        --port "$VLLM_PORT" \
-       --max-model-len 4096 \
-       --gpu-memory-utilization 0.85 &
+       --max-model-len "$VLLM_MAX_MODEL_LEN" \
+       --gpu-memory-utilization 0.85 2>&1 | tee "$VLLM_LOG" &
 
-VLLM_PID=$!
-cleanup() { echo "Stopping vLLM..."; kill "$VLLM_PID" 2>/dev/null || true; wait "$VLLM_PID" 2>/dev/null || true; }
+# vLLM runs inside a pipe (| tee), and after boot the launcher hands off to
+# separate "APIServer"/"EngineCore" processes -- so matching only "launch_vllm.py"
+# wrongly reports the server as dead once it's actually serving. Match the whole
+# vLLM process family for both liveness and cleanup.
+VLLM_PROCS="launch_vllm.py|vllm.entrypoints|EngineCore|APIServer|vllm serve|from_engine_args"
+cleanup() { echo "Stopping vLLM..."; pkill -f "$VLLM_PROCS" 2>/dev/null || true; }
 trap cleanup EXIT
-echo "Waiting for server..."
-until curl -sf "http://localhost:${VLLM_PORT}/health" >/dev/null 2>&1; do sleep 2; done
-echo "Server ready."
+
+echo "Waiting for server (health is the source of truth; ${VLLM_BOOT_TIMEOUT:-1800}s cap)..."
+WAITED=0
+BOOT_TIMEOUT=${VLLM_BOOT_TIMEOUT:-1800}   # 30 min: model load + graph capture on NPU can be slow
+GRACE=120                                 # don't treat "no process" as fatal during early boot/handoff
+until curl -sf "http://localhost:${VLLM_PORT}/health" >/dev/null 2>&1; do
+    # Only conclude "crashed" if the WHOLE vLLM family is gone AND we're past the
+    # grace window (the launcher exits/handoff happens during normal startup).
+    if [ "$WAITED" -ge "$GRACE" ] && ! pgrep -f "$VLLM_PROCS" >/dev/null 2>&1; then
+        echo "ERROR: no vLLM process alive and port still down after ${WAITED}s. Last 40 lines:"
+        tail -n 40 "$VLLM_LOG" 2>/dev/null || true
+        exit 1
+    fi
+    if [ "$WAITED" -ge "$BOOT_TIMEOUT" ]; then
+        echo "ERROR: vLLM not healthy after ${BOOT_TIMEOUT}s. Last 40 lines:"
+        tail -n 40 "$VLLM_LOG" 2>/dev/null || true
+        exit 1
+    fi
+    sleep 5; WAITED=$(( WAITED + 5 ))
+    [ $(( WAITED % 30 )) -eq 0 ] && echo "  ...still waiting (${WAITED}s)" || true
+done
+echo "Server ready after ${WAITED}s."
 
 export TORCH_COMPILE_DISABLE=1 TORCHDYNAMO_DISABLE=1
 
@@ -242,6 +278,7 @@ ASCEND_RT_VISIBLE_DEVICES="$TRAIN_NPUS" torchrun \
     --request-timeout 180 \
     --max-retries 8 \
     --log-freq 10 \
+    --no-resume-from-checkpoint \
     --seed "$SEED"
 
 echo "=== Step 4: final drafter config (authoritative, from saved checkpoint) ==="

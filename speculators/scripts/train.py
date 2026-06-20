@@ -138,7 +138,7 @@ def create_transformer_layer_config(
             f"{type(verifier_config).__name__} has neither 'hidden_act' "
             "nor 'hidden_activation'"
         )
-
+    
     return config_class(
         vocab_size=verifier_config.vocab_size,
         hidden_size=verifier_config.hidden_size,
