@@ -96,7 +96,7 @@ DATASET="/home/n84449292/m84379596/Huggingface/datasets/open_perfectblend_full.j
 DATA_OUT="/home/n84449292/m84379596/dflash_dsv4_col_multinode"
 SHARED_STORAGE_PATH="/dev/shm/hidden_states"
 
-MAX_SAMPLES=""
+MAX_SAMPLES=1000
 SEQ_LENGTH=1024
 EPOCHS=1
 LR=6e-4
