@@ -8,5 +8,5 @@
 	branch = main
 [submodule "speculators"]
 	path = speculators
-	url = https://github.com/vllm-project/speculators.git
-	branch = main
+	url = https://github.com/MohammadMahdi1375/speculators.git
+	branch = spec_main
