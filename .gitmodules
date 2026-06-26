@@ -1,0 +1,12 @@
+[submodule "vllm"]
+	path = vllm
+	url = https://github.com/vllm-project/vllm.git
+	branch = main
+[submodule "vllm-ascend"]
+	path = vllm-ascend
+	url = https://github.com/vllm-project/vllm-ascend.git
+	branch = main
+[submodule "speculators"]
+	path = speculators
+	url = https://github.com/vllm-project/speculators.git
+	branch = main
