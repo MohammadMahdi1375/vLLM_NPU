@@ -53,53 +53,109 @@
 
 
 
-
-
-
-
 cd /home/n84449292/m84379596/DFlash/vLLM_NPU/vllm
+
 source /home/n84449292/m84379596/CANN/CANN9.0.0/ascend-toolkit/set_env.sh
 source /home/n84449292/m84379596/CANN/CANN9.0.0/nnal/atb/set_env.sh
 
-pkill -9 -f "vllm serve|EngineCore|multiproc_executor|Worker_TP" 2>/dev/null || true
-sleep 5
+pkill -9 -f "vllm serve" 2>/dev/null || true
+pkill -9 -f "multiproc_executor" 2>/dev/null || true
+pkill -9 -f "EngineCore" 2>/dev/null || true
+sleep 3
 
 export PYTHONPATH=/home/n84449292/m84379596/DFlash/vLLM_NPU/vllm:/home/n84449292/m84379596/DFlash/vLLM_NPU/vllm-ascend:$PYTHONPATH
-export ASCEND_RT_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+
 export VLLM_USE_V1=1
+
+# Keep these because you are serving DeepSeek-V4-Flash.
+# They are not drafter/speculator flags; they are your DSV4/vLLM-Ascend patches.
 export VLLM_ASCEND_APPLY_DSV4_PATCH=1
 export DSV4_VLLM_SERVE_PATCH=1
-export DFLASH_DISABLE_QLI=1
+
+# No DFlash/speculative decoding needed for target-only serving.
+unset DFLASH_DISABLE_QLI
 unset VLLM_ASCEND_ENABLE_FLASHCOMM1
 
-export MASTER_ADDR=80.5.5.108
+# One node: use local 8 NPUs.
+export ASCEND_RT_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+
+# Single-node distributed setup.
+export MASTER_ADDR=127.0.0.1
 export MASTER_PORT=29501
 export HCCL_CONNECT_TIMEOUT=1800
-export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
 
 export GLOO_SOCKET_IFNAME=$(ip -o -4 addr show | awk '/80\.5\.5\./{print $2; exit}')
 export HCCL_SOCKET_IFNAME=$GLOO_SOCKET_IFNAME
 export TP_SOCKET_IFNAME=$GLOO_SOCKET_IFNAME
 export GLOO_USE_IPV6=0
 
-TARGET=/home/n84449292/m84379596/Huggingface/DeepSeek-V4-Flash-bf16
-DRAFT=/home/n84449292/m84379596/dflash_dsv4_col_multinode/checkpoints/10000_vllm
+MODEL=/home/n84449292/m84379596/Huggingface/DeepSeek-V4-Flash-bf16
 
-vllm serve "$TARGET" \
+vllm serve "$MODEL" \
   --trust-remote-code \
-  --tensor-parallel-size 16 \
+  --tensor-parallel-size 8 \
   --pipeline-parallel-size 1 \
-  --nnodes 2 \
-  --node-rank 0 \
-  --master-addr 80.5.5.108 \
-  --master-port 29501 \
+  --nnodes 1 \
   --enable-expert-parallel \
-  --gpu-memory-utilization 0.80 \
   --max-num-seqs 1 \
-  --max-model-len 1024 \
-  --max-num-batched-tokens 1024 \
+  --max-model-len 2048 \
+  --gpu-memory-utilization 0.5 \
   --block-size 128 \
+  --max-num-batched-tokens 2048 \
   --no-enable-prefix-caching \
-  --speculative-config '{"model":"'"$DRAFT"'","num_speculative_tokens":9,"draft_tensor_parallel_size":16}' \
   --host 0.0.0.0 \
   --port 30000
+
+
+
+
+
+
+
+
+# cd /home/n84449292/m84379596/DFlash/vLLM_NPU/vllm
+# source /home/n84449292/m84379596/CANN/CANN9.0.0/ascend-toolkit/set_env.sh
+# source /home/n84449292/m84379596/CANN/CANN9.0.0/nnal/atb/set_env.sh
+
+# pkill -9 -f "vllm serve|EngineCore|multiproc_executor|Worker_TP" 2>/dev/null || true
+# sleep 5
+
+# export PYTHONPATH=/home/n84449292/m84379596/DFlash/vLLM_NPU/vllm:/home/n84449292/m84379596/DFlash/vLLM_NPU/vllm-ascend:$PYTHONPATH
+# export ASCEND_RT_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+# export VLLM_USE_V1=1
+# export VLLM_ASCEND_APPLY_DSV4_PATCH=1
+# export DSV4_VLLM_SERVE_PATCH=1
+# export DFLASH_DISABLE_QLI=1
+# unset VLLM_ASCEND_ENABLE_FLASHCOMM1
+
+# export MASTER_ADDR=80.5.5.108
+# export MASTER_PORT=29501
+# export HCCL_CONNECT_TIMEOUT=1800
+# export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
+
+# export GLOO_SOCKET_IFNAME=$(ip -o -4 addr show | awk '/80\.5\.5\./{print $2; exit}')
+# export HCCL_SOCKET_IFNAME=$GLOO_SOCKET_IFNAME
+# export TP_SOCKET_IFNAME=$GLOO_SOCKET_IFNAME
+# export GLOO_USE_IPV6=0
+
+# TARGET=/home/n84449292/m84379596/Huggingface/DeepSeek-V4-Flash-bf16
+# DRAFT=/home/n84449292/m84379596/dflash_dsv4_col_multinode/checkpoints/10000_vllm
+
+# vllm serve "$TARGET" \
+#   --trust-remote-code \
+#   --tensor-parallel-size 16 \
+#   --pipeline-parallel-size 1 \
+#   --nnodes 2 \
+#   --node-rank 0 \
+#   --master-addr 80.5.5.108 \
+#   --master-port 29501 \
+#   --enable-expert-parallel \
+#   --gpu-memory-utilization 0.80 \
+#   --max-num-seqs 1 \
+#   --max-model-len 1024 \
+#   --max-num-batched-tokens 1024 \
+#   --block-size 128 \
+#   --no-enable-prefix-caching \
+#   --speculative-config '{"model":"'"$DRAFT"'","num_speculative_tokens":9,"draft_tensor_parallel_size":16}' \
+#   --host 0.0.0.0 \
+#   --port 30000
