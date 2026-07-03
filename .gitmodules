@@ -1,12 +1,12 @@
 [submodule "vllm"]
 	path = vllm
 	url = https://github.com/MohammadMahdi1375/vllm.git
-	branch = spec_main
+	branch = spec_dsv4
 [submodule "vllm-ascend"]
 	path = vllm-ascend
 	url = https://github.com/MohammadMahdi1375/vllm-ascend.git
-	branch = spec_main
+	branch = spec_dsv4
 [submodule "speculators"]
 	path = speculators
 	url = https://github.com/MohammadMahdi1375/speculators.git
-	branch = spec_main
+	branch = spec_dsv4
