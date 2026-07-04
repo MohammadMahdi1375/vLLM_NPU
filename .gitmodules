@@ -9,4 +9,4 @@
 [submodule "speculators"]
 	path = speculators
 	url = https://github.com/MohammadMahdi1375/speculators.git
-	branch = spec_dsv4
+	branch = spec_main
