@@ -1,10 +1,58 @@
 # Ascend NPU DFlash Qwen3-4B Training Setup
 
-This document describes the working source-based setup for training a DFlash draft model with:
+Comprehensive installation, environment, Git workflow, and training guide for running DFlash draft-model training on Huawei Ascend NPUs using:
 
-- `vllm`
-- `vllm-ascend`
-- `speculators`
+- [`vllm`](https://github.com/vllm-project/vllm)
+- [`vllm-ascend`](https://github.com/vllm-project/vllm-ascend)
+- [`speculators`](https://github.com/vllm-project/speculators)
+- Huawei CANN 9.0.0
+- NNAL / ATB 9.0.0
+- PyTorch + `torch-npu` 2.10.0
+
+This setup is intended for source-based development, not only package usage. The goal is to make changes in `vllm`, `vllm-ascend`, or `speculators` and have those changes immediately reflected in training.
+
+---
+
+## Table of contents
+
+1. [What this repository contains](#1-what-this-repository-contains)
+2. [Validated stack](#2-validated-stack)
+3. [Target directory layout](#3-target-directory-layout)
+4. [High-level installation order](#4-high-level-installation-order)
+5. [System dependencies](#5-system-dependencies)
+6. [CANN, ops, NNAL, and ATB installation](#6-cann-ops-nnal-and-atb-installation)
+7. [GitHub SSH/proxy setup](#7-github-sshproxy-setup)
+8. [Clone parent repository and submodules](#8-clone-parent-repository-and-submodules)
+9. [Submodule remote structure](#9-submodule-remote-structure)
+10. [Create conda environment](#10-create-conda-environment)
+11. [Source CANN/ATB and set paths](#11-source-cannatb-and-set-paths)
+12. [Install vLLM from source](#12-install-vllm-from-source)
+13. [Install vllm-ascend from source](#13-install-vllm-ascend-from-source)
+14. [Install triton-ascend and pin NumPy](#14-install-triton-ascend-and-pin-numpy)
+15. [Install speculators from source](#15-install-speculators-from-source)
+16. [Create conda activation hook](#16-create-conda-activation-hook)
+17. [Final health checks](#17-final-health-checks)
+18. [Training script requirements](#18-training-script-requirements)
+19. [Current Qwen3-4B DFlash training configuration](#19-current-qwen3-4b-dflash-training-configuration)
+20. [Run training](#20-run-training)
+21. [Development workflow with submodules](#21-development-workflow-with-submodules)
+22. [Pulling upstream changes](#22-pulling-upstream-changes)
+23. [Testing or merging official PRs](#23-testing-or-merging-official-prs)
+24. [Troubleshooting](#24-troubleshooting)
+25. [Minimal rerun checklist](#25-minimal-rerun-checklist)
+
+---
+
+## 1. What this repository contains
+
+The parent repository is a coordination repository that keeps compatible source checkouts of:
+
+```text
+vLLM_NPU_spec_main/
+├── vllm/          # source checkout of vLLM
+├── vllm-ascend/   # source checkout of vLLM Ascend plugin
+└── speculators/   # source checkout of vLLM speculators
+```
 
 The intended parent workspace is:
 
@@ -18,43 +66,41 @@ The parent repository branch is:
 spec_main
 ```
 
-The parent repository contains three Git submodules:
-
-```text
-vLLM_NPU_spec_main/
-├── vllm/         # source checkout of vLLM
-├── vllm-ascend/  # source checkout of vllm-ascend
-└── speculators/  # source checkout of speculators
-```
-
-The training script used for Qwen3-4B DFlash is:
+The main Qwen3-4B DFlash training script is expected at:
 
 ```bash
 /home/n84449292/m84379596/DFlash/vLLM_NPU_spec_main/speculators/examples/ascend_npu_dflash/dflash_qwen3_4b.sh
 ```
 
+The design is:
+
+- the parent repo stores the exact submodule pointers;
+- each submodule is a real Git repo;
+- each submodule uses the user's fork as `origin`;
+- each submodule can also track the official `vllm-project` repo as `upstream`.
+
 ---
 
-## 1. Known-good versions
+## 2. Validated stack
 
 This setup was validated with the following stack.
 
 | Component | Version / branch | Notes |
 |---|---:|---|
 | OS | Linux | Ascend A2 node |
-| Python | 3.11 | Conda env |
+| Architecture | `aarch64` | Important for vLLM source build behavior |
+| Python | 3.11 | Conda environment |
 | CANN | 9.0.0 | Required by `torch-npu` and `vllm-ascend` |
+| Ascend ops | 910B ops 9.0.0 | Installed into CANN root |
 | NNAL / ATB | 9.0.0 | Required for `libatb.so` |
 | PyTorch | 2.10.0+cpu | Used together with `torch-npu` |
 | torch-npu | 2.10.0 | Provides NPU backend |
-| vLLM | v0.20.2 | Source install from submodule |
-| vllm-ascend | v0.20.2rc1 | Source install from submodule |
-| triton-ascend | 3.2.1 | Install last |
+| vLLM | v0.20.2 compatible source | Source install from submodule |
+| vllm-ascend | v0.20.2rc compatible source | Source install from submodule |
+| triton-ascend | 3.2.1 | Install after core dependencies |
 | NumPy | 1.26.4 | Required by `triton-ascend==3.2.1` |
-| Speculators | `spec_main` fork branch | Must include PR #589 / `--draft-attn-impl` |
+| Speculators | `spec_main` fork branch | Must include support for `--draft-attn-impl` |
 | DFlash attention backend | `sdpa` | Required on Ascend; do not use flex attention |
-
-The vLLM Ascend documentation lists Linux, Python >=3.10 and <3.13, Ascend NPU hardware, CANN 9.0.0, `torch==2.10.0`, `torch-npu==2.10.0`, and NNAL 9.0.0 as requirements for the current Ascend stack. The vLLM Ascend repository also notes that vLLM Ascend is the community-maintained Ascend plugin for vLLM and that its release branches are paired with corresponding vLLM versions.
 
 References:
 
@@ -65,7 +111,73 @@ References:
 
 ---
 
-## 2. System dependencies
+## 3. Target directory layout
+
+Recommended final layout:
+
+```text
+/home/n84449292/m84379596/
+├── CANN/
+│   └── CANN9.0.0/
+│       ├── ascend-toolkit/
+│       │   └── set_env.sh
+│       ├── cann-9.0.0/
+│       │   └── set_env.sh
+│       └── nnal/
+│           └── atb/
+│               └── set_env.sh
+├── CANN_9.0.0/
+│   ├── Ascend-cann-toolkit_9.0.0_linux-aarch64.run
+│   ├── Ascend-cann-910b-ops_9.0.0_linux-aarch64.run
+│   └── Ascend-cann-nnal_9.0.0_linux-aarch64.run
+├── conda/
+│   └── vllm-ascend-0202/
+└── DFlash/
+    └── vLLM_NPU_spec_main/
+        ├── vllm/
+        ├── vllm-ascend/
+        └── speculators/
+```
+
+The important source commands are:
+
+```bash
+source /home/n84449292/m84379596/CANN/CANN9.0.0/ascend-toolkit/set_env.sh
+source /home/n84449292/m84379596/CANN/CANN9.0.0/nnal/atb/set_env.sh
+```
+
+If your toolkit installer prints a different CANN environment path, this also may exist:
+
+```bash
+source /home/n84449292/m84379596/CANN/CANN9.0.0/cann-9.0.0/set_env.sh
+```
+
+For this training stack, use ATB for large-model scenarios. Do not source `asdsip` together with ATB.
+
+---
+
+## 4. High-level installation order
+
+Use this order:
+
+1. Install CANN toolkit.
+2. Install Ascend 910B ops.
+3. Install NNAL / ATB.
+4. Configure GitHub SSH over port 443 and proxy if needed.
+5. Clone parent repo and submodules.
+6. Create a clean Python 3.11 conda environment.
+7. Source CANN and ATB.
+8. Install `vllm` from source with `VLLM_TARGET_DEVICE=empty`.
+9. Install `vllm-ascend` from source with `--no-build-isolation`.
+10. Install `triton-ascend==3.2.1` and pin `numpy==1.26.4`.
+11. Install `speculators` from source.
+12. Create a conda activation hook.
+13. Run import and NPU health checks.
+14. Run DFlash training.
+
+---
+
+## 5. System dependencies
 
 Install system build tools.
 
@@ -82,11 +194,239 @@ sudo apt-get install -y gcc g++ cmake libnuma-dev git curl wget jq
 sudo yum install -y gcc gcc-c++ cmake numactl-devel git curl wget jq
 ```
 
+Check compiler tools:
+
+```bash
+gcc --version
+g++ --version
+cmake --version
+git --version
+```
+
 ---
 
-## 3. Clone the parent repository with submodules
+## 6. CANN, ops, NNAL, and ATB installation
 
-Clone your parent repo branch:
+Assume the `.run` installers are in:
+
+```bash
+/home/n84449292/m84379596/CANN_9.0.0
+```
+
+Set the target install root:
+
+```bash
+cd /home/n84449292/m84379596/CANN_9.0.0
+
+export CANN_ROOT=/home/n84449292/m84379596/CANN/CANN9.0.0
+
+mkdir -p "$CANN_ROOT"
+chmod +x *.run
+```
+
+Install in this order.
+
+### 6.1 Install CANN toolkit
+
+```bash
+./Ascend-cann-toolkit_9.0.0_linux-aarch64.run \
+  --install \
+  --install-path="$CANN_ROOT"
+```
+
+When prompted:
+
+```text
+Do you accept the EULA to install CANN?[Y/N]
+```
+
+type:
+
+```text
+Y
+```
+
+### 6.2 Install 910B ops
+
+```bash
+./Ascend-cann-910b-ops_9.0.0_linux-aarch64.run \
+  --install \
+  --install-path="$CANN_ROOT"
+```
+
+Again accept the EULA with `Y`.
+
+### 6.3 Install NNAL / ATB
+
+```bash
+./Ascend-cann-nnal_9.0.0_linux-aarch64.run \
+  --install \
+  --install-path="$CANN_ROOT"
+```
+
+Again accept the EULA with `Y`.
+
+The successful NNAL installation should mention:
+
+```text
+Ascend-cann-atb_9.0.0_linux-aarch64.run install success
+Ascend-cann-SIP_9.0.0_linux-aarch64.run install success
+Ascend-cann-nnal_9.0.0_linux-aarch64.run install success
+```
+
+### 6.4 Verify CANN and ATB files
+
+```bash
+find /home/n84449292/m84379596/CANN/CANN9.0.0 -name set_env.sh
+```
+
+Expected important files:
+
+```text
+/home/n84449292/m84379596/CANN/CANN9.0.0/ascend-toolkit/set_env.sh
+/home/n84449292/m84379596/CANN/CANN9.0.0/nnal/atb/set_env.sh
+/home/n84449292/m84379596/CANN/CANN9.0.0/cann-9.0.0/set_env.sh
+```
+
+Source the environment:
+
+```bash
+source /home/n84449292/m84379596/CANN/CANN9.0.0/ascend-toolkit/set_env.sh
+source /home/n84449292/m84379596/CANN/CANN9.0.0/nnal/atb/set_env.sh
+```
+
+Verify:
+
+```bash
+npu-smi info
+which atc || true
+echo "$LD_LIBRARY_PATH" | tr ':' '\n' | grep -Ei 'ascend|atb' | head -20
+```
+
+### 6.5 Important ATB warning
+
+NNAL may also install `asdsip`:
+
+```bash
+/home/n84449292/m84379596/CANN/CANN9.0.0/nnal/asdsip/set_env.sh
+```
+
+Do not source both ATB and ASDSIP at the same time. For large-model vLLM scenarios, use ATB:
+
+```bash
+source /home/n84449292/m84379596/CANN/CANN9.0.0/nnal/atb/set_env.sh
+```
+
+---
+
+## 7. GitHub SSH/proxy setup
+
+On some servers, GitHub port 22 is blocked:
+
+```text
+ssh: connect to host github.com port 22: Connection timed out
+```
+
+Use GitHub SSH over port 443:
+
+```bash
+ssh -T -p 443 git@ssh.github.com
+```
+
+If the cluster requires an HTTP proxy, define a Git SSH alias named `github-real`.
+
+### 7.1 Generate SSH key
+
+```bash
+mkdir -p ~/.ssh
+chmod 700 ~/.ssh
+
+ssh-keygen -t ed25519 -f ~/.ssh/github_ed25519 -C "n84449292@80.5.5.115"
+
+cat ~/.ssh/github_ed25519.pub
+```
+
+Add the printed public key to:
+
+```text
+GitHub → Settings → SSH and GPG keys → New SSH key
+```
+
+### 7.2 SSH config without proxy
+
+```bash
+cat > ~/.ssh/config <<'EOF'
+Host github-real
+    HostName ssh.github.com
+    Port 443
+    User git
+    IdentityFile ~/.ssh/github_ed25519
+    IdentitiesOnly yes
+EOF
+
+chmod 600 ~/.ssh/config
+```
+
+Test:
+
+```bash
+ssh -T github-real
+```
+
+Expected:
+
+```text
+Hi <username>! You've successfully authenticated, but GitHub does not provide shell access.
+```
+
+### 7.3 SSH config with proxy
+
+Do not commit real proxy passwords into the repository. Use placeholders or environment variables in documentation.
+
+First confirm `nc` exists:
+
+```bash
+command -v nc
+ls -lh /usr/bin/nc
+```
+
+Template:
+
+```bash
+cat > ~/.ssh/config <<'EOF'
+Host github-real
+    HostName ssh.github.com
+    Port 443
+    User git
+    IdentityFile ~/.ssh/github_ed25519
+    IdentitiesOnly yes
+    ProxyCommand /usr/bin/nc --proxy <PROXY_HOST>:<PROXY_PORT> --proxy-type http --proxy-auth '<PROXY_USER>:<PROXY_PASSWORD>' --proxy-dns remote %h %p
+
+Host github.com
+    HostName ssh.github.com
+    Port 443
+    User git
+    IdentityFile ~/.ssh/github_ed25519
+    IdentitiesOnly yes
+    ProxyCommand /usr/bin/nc --proxy <PROXY_HOST>:<PROXY_PORT> --proxy-type http --proxy-auth '<PROXY_USER>:<PROXY_PASSWORD>' --proxy-dns remote %h %p
+EOF
+
+chmod 600 ~/.ssh/config
+```
+
+Test:
+
+```bash
+ssh -T github-real
+```
+
+If it works, you can use `git@github-real:owner/repo.git`.
+
+---
+
+## 8. Clone parent repository and submodules
+
+Clone the parent repository:
 
 ```bash
 mkdir -p /home/n84449292/m84379596/DFlash
@@ -97,103 +437,149 @@ git clone --branch spec_main --recurse-submodules \
   vLLM_NPU_spec_main
 ```
 
-If already cloned without submodules:
+If the parent repo cloned but the submodules failed because of HTTPS SSL issues, enter the parent repo and fix `.gitmodules`.
 
 ```bash
 cd /home/n84449292/m84379596/DFlash/vLLM_NPU_spec_main
-git switch spec_main
-git submodule update --init --recursive
 ```
 
-Expected layout:
+Set submodule URLs to your forks over SSH:
 
 ```bash
-ls /home/n84449292/m84379596/DFlash/vLLM_NPU_spec_main
+git submodule set-url speculators git@github-real:MohammadMahdi1375/speculators.git
+git submodule set-url vllm git@github-real:MohammadMahdi1375/vllm.git
+git submodule set-url vllm-ascend git@github-real:MohammadMahdi1375/vllm-ascend.git
+
+git submodule sync --recursive
 ```
 
-should include:
+Optionally add a global rewrite rule so GitHub HTTPS submodule URLs are redirected to the working SSH alias:
+
+```bash
+git config --global url."git@github-real:".insteadOf "https://github.com/"
+git config --global --get-regexp 'url.*insteadOf'
+```
+
+Clean failed partial submodule folders:
+
+```bash
+git submodule deinit -f --all || true
+
+rm -rf speculators vllm vllm-ascend
+rm -rf .git/modules/speculators .git/modules/vllm .git/modules/vllm-ascend
+```
+
+Clone submodules again:
+
+```bash
+git submodule update --init --recursive --jobs 3
+```
+
+Verify:
+
+```bash
+git submodule status --recursive
+ls -lh
+```
+
+Expected:
 
 ```text
+speculators
 vllm
 vllm-ascend
-speculators
 ```
+
+Nested dependencies such as `vllm-ascend/csrc/third_party/catlass` and `catlass/3rdparty/googletest` should also clone.
 
 ---
 
-## 4. Recommended Git remote structure
+## 9. Submodule remote structure
 
 Each submodule should have:
 
 ```text
-origin   = your fork, used for pushing
-upstream = official vllm-project repo, used for pulling official updates
+origin   = your fork, used for pushing your changes
+upstream = official vllm-project repository, used for pulling official updates
 ```
 
-Expected remotes:
-
-### Parent repo
+Set them explicitly:
 
 ```bash
-cd /home/n84449292/m84379596/DFlash/vLLM_NPU_spec_main
-git remote -v
+export SPEC_MAIN=/home/n84449292/m84379596/DFlash/vLLM_NPU_spec_main
 ```
 
-Expected:
-
-```text
-origin  git@github-real:MohammadMahdi1375/vLLM_NPU.git
-```
-
-### vLLM submodule
+### 9.1 speculators
 
 ```bash
-cd /home/n84449292/m84379596/DFlash/vLLM_NPU_spec_main/vllm
-git remote -v
+cd "$SPEC_MAIN/speculators"
+
+git remote set-url origin git@github-real:MohammadMahdi1375/speculators.git
+git remote remove upstream 2>/dev/null || true
+git remote add upstream git@github-real:vllm-project/speculators.git
 ```
 
-Expected:
-
-```text
-origin    git@github-real:MohammadMahdi1375/vllm.git
-upstream  https://github.com/vllm-project/vllm.git
-```
-
-### vllm-ascend submodule
+### 9.2 vLLM
 
 ```bash
-cd /home/n84449292/m84379596/DFlash/vLLM_NPU_spec_main/vllm-ascend
-git remote -v
+cd "$SPEC_MAIN/vllm"
+
+git remote set-url origin git@github-real:MohammadMahdi1375/vllm.git
+git remote remove upstream 2>/dev/null || true
+git remote add upstream git@github-real:vllm-project/vllm.git
 ```
 
-Expected:
-
-```text
-origin    git@github-real:MohammadMahdi1375/vllm-ascend.git
-upstream  https://github.com/vllm-project/vllm-ascend.git
-```
-
-### speculators submodule
+### 9.3 vllm-ascend
 
 ```bash
-cd /home/n84449292/m84379596/DFlash/vLLM_NPU_spec_main/speculators
-git remote -v
+cd "$SPEC_MAIN/vllm-ascend"
+
+git remote set-url origin git@github-real:MohammadMahdi1375/vllm-ascend.git
+git remote remove upstream 2>/dev/null || true
+git remote add upstream git@github-real:vllm-project/vllm-ascend.git
 ```
 
-Expected:
+Verify:
 
-```text
-origin    git@github-real:MohammadMahdi1375/speculators.git
-upstream  https://github.com/vllm-project/speculators.git
+```bash
+cd "$SPEC_MAIN"
+
+git submodule foreach 'echo "=== $name ==="; git branch --show-current; git remote -v'
 ```
+
+### 9.4 Switch submodules to working branches
+
+Submodules often clone in detached HEAD mode because the parent repo stores exact commits. To work on them, switch each one to `spec_main`.
+
+```bash
+cd "$SPEC_MAIN/speculators"
+git switch spec_main || git switch -c spec_main --track origin/spec_main
+
+cd "$SPEC_MAIN/vllm"
+git switch spec_main || git switch -c spec_main --track origin/spec_main
+
+cd "$SPEC_MAIN/vllm-ascend"
+git switch spec_main || git switch -c spec_main --track origin/spec_main
+```
+
+Commit the corrected `.gitmodules` in the parent repository:
+
+```bash
+cd "$SPEC_MAIN"
+
+git status
+git add .gitmodules speculators vllm vllm-ascend
+git commit -m "Use SSH fork URLs for submodules"
+git push origin spec_main
+```
+
+If Git says there is nothing to commit, that is fine.
 
 ---
 
-## 5. Create a clean conda environment
+## 10. Create conda environment
 
-Do not reuse the older `vllm-dflash` environment for this stack.
-
-Create a fresh env:
+Do not reuse older environments such as `vllm-dflash` for this stack.
 
 ```bash
 source "$(conda info --base)/etc/profile.d/conda.sh"
@@ -209,28 +595,47 @@ python -m pip install --upgrade pip setuptools wheel
 
 ---
 
-## 6. Source CANN and NNAL
+## 11. Source CANN/ATB and set paths
 
-Use the CANN/NNAL installation already available on the node:
+Always clear old `PYTHONPATH` before sourcing CANN. This prevents old repo paths from leaking into the environment while preserving CANN Python packages such as `acl`.
 
 ```bash
+conda activate /home/n84449292/m84379596/conda/vllm-ascend-0202
+
+export SPEC_MAIN=/home/n84449292/m84379596/DFlash/vLLM_NPU_spec_main
+
+unset PYTHONPATH
+
 source /home/n84449292/m84379596/CANN/CANN9.0.0/ascend-toolkit/set_env.sh
 source /home/n84449292/m84379596/CANN/CANN9.0.0/nnal/atb/set_env.sh
+
+export PYTHONPATH="$SPEC_MAIN/speculators/src:$SPEC_MAIN/vllm:$SPEC_MAIN/vllm-ascend:${PYTHONPATH:-}"
 ```
 
-Verify NPU driver visibility:
+Verify:
 
 ```bash
-npu-smi info
+python - <<'PY'
+import sys
+print("\n".join(sys.path[:10]))
+PY
 ```
 
 ---
 
-## 7. Install vLLM from source
+## 12. Install vLLM from source
 
-### Important
+On `aarch64`, do not run:
 
-On `aarch64`, do not run plain `pip install vllm`. It may fall back to a CUDA-oriented source build and fail with `CUDA_HOME is not set`.
+```bash
+pip install vllm
+```
+
+It may fall back to a CUDA-oriented source build and fail with:
+
+```text
+CUDA_HOME is not set
+```
 
 Use:
 
@@ -238,9 +643,9 @@ Use:
 VLLM_TARGET_DEVICE=empty
 ```
 
-because the NPU kernels come from `vllm-ascend`, not from vLLM.
+because the NPU kernels are supplied by `vllm-ascend`, not by the base vLLM package.
 
-Install from the submodule:
+Install:
 
 ```bash
 conda activate /home/n84449292/m84379596/conda/vllm-ascend-0202
@@ -249,46 +654,46 @@ export SPEC_MAIN=/home/n84449292/m84379596/DFlash/vLLM_NPU_spec_main
 
 cd "$SPEC_MAIN/vllm"
 
-git fetch upstream --tags
-git checkout spec_main 2>/dev/null || git switch -c spec_main
-
 VLLM_TARGET_DEVICE=empty python -m pip install -e .
 ```
 
-If the submodule is pinned to `v0.20.2`, verify:
+Verify:
 
 ```bash
-git describe --tags --always
+python - <<'PY'
+import vllm
+print(vllm.__file__)
+PY
 ```
 
-Expected base:
+Expected path:
 
 ```text
-v0.20.2
+/home/n84449292/m84379596/DFlash/vLLM_NPU_spec_main/vllm/vllm/__init__.py
 ```
 
 ---
 
-## 8. Install vllm-ascend from source
+## 13. Install vllm-ascend from source
 
-Use source install because modifications to `.py` files in `vllm-ascend/` should affect training.
+Use editable source install because changes in `vllm-ascend/` Python files should affect training immediately.
 
 ```bash
 conda activate /home/n84449292/m84379596/conda/vllm-ascend-0202
 
+export SPEC_MAIN=/home/n84449292/m84379596/DFlash/vLLM_NPU_spec_main
+
+unset PYTHONPATH
 source /home/n84449292/m84379596/CANN/CANN9.0.0/ascend-toolkit/set_env.sh
 source /home/n84449292/m84379596/CANN/CANN9.0.0/nnal/atb/set_env.sh
-
-export SPEC_MAIN=/home/n84449292/m84379596/DFlash/vLLM_NPU_spec_main
+export PYTHONPATH="$SPEC_MAIN/speculators/src:$SPEC_MAIN/vllm:$SPEC_MAIN/vllm-ascend:${PYTHONPATH:-}"
 
 cd "$SPEC_MAIN/vllm-ascend"
 
-git fetch upstream --tags
-git checkout spec_main 2>/dev/null || git switch -c spec_main
 git submodule update --init --recursive
 ```
 
-Install build dependencies into the current env. This avoids isolated-build failures where `triton-ascend` is not visible to the build env.
+Install build dependencies into the current environment. This avoids isolated-build failures where `triton-ascend` or CANN-related packages are not visible to the build environment.
 
 ```bash
 python -m pip install \
@@ -301,13 +706,13 @@ python -m pip install \
   arctic-inference==0.1.1 triton-ascend==3.2.1
 ```
 
-Then install `vllm-ascend` editable:
+Install editable:
 
 ```bash
 python -m pip install -e . --no-build-isolation
 ```
 
-If you only changed Python files later, no rebuild is usually needed. If you changed compiled custom ops/C++/NPU code, rerun:
+If only Python files were modified later, no rebuild is usually needed. If C++/custom ops/NPU compiled code was modified, rerun:
 
 ```bash
 cd "$SPEC_MAIN/vllm-ascend"
@@ -316,33 +721,16 @@ python -m pip install -e . --no-build-isolation
 
 ---
 
-## 9. Backfill CANN Python dependencies
+## 14. Install triton-ascend and pin NumPy
 
-A fresh conda env may miss packages required by CANN Python modules.
-
-```bash
-python -m pip install \
-  decorator "scipy>=1.7.3" ml-dtypes tornado absl-py attrs psutil pyyaml
-```
-
-Optional profiling tools:
-
-```bash
-python -m pip install matplotlib "pandas~=2.2" openpyxl
-```
-
----
-
-## 10. Install triton-ascend last
-
-Install `triton-ascend` after the rest of the stack:
+Install or reinstall `triton-ascend` after the core stack:
 
 ```bash
 python -m pip install triton-ascend==3.2.1 \
   --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi
 ```
 
-Then pin NumPy to the version required by `triton-ascend==3.2.1`:
+Then pin NumPy:
 
 ```bash
 python -m pip install --force-reinstall numpy==1.26.4
@@ -368,9 +756,9 @@ numpy: 1.26.4
 
 ---
 
-## 11. Install speculators from source
+## 15. Install speculators from source
 
-Install the `speculators` submodule in editable mode:
+Install the submodule in editable mode:
 
 ```bash
 conda activate /home/n84449292/m84379596/conda/vllm-ascend-0202
@@ -382,7 +770,7 @@ cd "$SPEC_MAIN/speculators"
 python -m pip install -e . --no-deps
 ```
 
-Install runtime dependencies used by the trainer:
+Install runtime dependencies used by training:
 
 ```bash
 python -m pip install \
@@ -402,7 +790,7 @@ python -m pip install \
   "typer>=0.12.0"
 ```
 
-TensorBoard is required because the current training script uses:
+TensorBoard is required if the training script uses:
 
 ```bash
 --logger tensorboard
@@ -410,9 +798,9 @@ TensorBoard is required because the current training script uses:
 
 ---
 
-## 12. Create conda activation hook
+## 16. Create conda activation hook
 
-This makes every activation repeatable and prevents old repo paths from leaking into the environment.
+This makes every environment activation reproducible.
 
 ```bash
 ENV_DIR=/home/n84449292/m84379596/conda/vllm-ascend-0202
@@ -425,11 +813,11 @@ export SPEC_MAIN=/home/n84449292/m84379596/DFlash/vLLM_NPU_spec_main
 # Clear old workspace paths first.
 unset PYTHONPATH
 
-# Source CANN/NNAL after clearing PYTHONPATH so their Python packages, including acl, are added.
+# Source CANN/ATB after clearing PYTHONPATH so CANN Python packages such as acl are added.
 source /home/n84449292/m84379596/CANN/CANN9.0.0/ascend-toolkit/set_env.sh
 source /home/n84449292/m84379596/CANN/CANN9.0.0/nnal/atb/set_env.sh
 
-# Prepend source repos while preserving CANN Python paths.
+# Prepend source repositories while preserving CANN Python paths.
 export PYTHONPATH="$SPEC_MAIN/speculators/src:$SPEC_MAIN/vllm:$SPEC_MAIN/vllm-ascend:${PYTHONPATH:-}"
 
 export no_proxy="localhost,127.0.0.1,::1"
@@ -448,7 +836,7 @@ conda activate /home/n84449292/m84379596/conda/vllm-ascend-0202
 
 ---
 
-## 13. Verify imports and NPU availability
+## 17. Final health checks
 
 Run:
 
@@ -478,17 +866,20 @@ print("load_and_preprocess_dataset:", inspect.signature(load_and_preprocess_data
 PY
 ```
 
-Expected paths:
+Expected important output:
 
 ```text
-vllm:        /home/n84449292/m84379596/DFlash/vLLM_NPU_spec_main/vllm/vllm/__init__.py
-vllm_ascend: /home/n84449292/m84379596/DFlash/vLLM_NPU_spec_main/vllm-ascend/vllm_ascend/__init__.py
-speculators: /home/n84449292/m84379596/DFlash/vLLM_NPU_spec_main/speculators/src/speculators/__init__.py
+acl OK
+torch: 2.10.0+cpu
+torch_npu: 2.10.0
 NPU available: True
 NPU count: 8
+vllm: /home/n84449292/m84379596/DFlash/vLLM_NPU_spec_main/vllm/vllm/__init__.py
+vllm_ascend: /home/n84449292/m84379596/DFlash/vLLM_NPU_spec_main/vllm-ascend/vllm_ascend/__init__.py
+speculators: /home/n84449292/m84379596/DFlash/vLLM_NPU_spec_main/speculators/src/speculators/__init__.py
 ```
 
-Also verify the vLLM CLI import:
+Also verify the vLLM CLI:
 
 ```bash
 python -m vllm.entrypoints.cli.main --help >/tmp/vllm_cli_help.log && echo "vLLM CLI OK"
@@ -502,7 +893,7 @@ vLLM CLI OK
 
 ---
 
-## 14. Training script requirements
+## 18. Training script requirements
 
 The Qwen3-4B script should be here:
 
@@ -510,11 +901,9 @@ The Qwen3-4B script should be here:
 $SPEC_MAIN/speculators/examples/ascend_npu_dflash/dflash_qwen3_4b.sh
 ```
 
-Important requirements inside the script:
+### 18.1 Correct source path setup
 
-### Correct source path setup
-
-The top of the script must preserve CANN Python paths:
+At the top of the script, use this order:
 
 ```bash
 export SPEC_MAIN=/home/n84449292/m84379596/DFlash/vLLM_NPU_spec_main
@@ -534,27 +923,27 @@ source /home/n84449292/m84379596/CANN/CANN9.0.0/ascend-toolkit/set_env.sh
 unset PYTHONPATH
 ```
 
-because it removes the CANN Python paths and causes:
+That removes the CANN Python paths and can cause:
 
 ```text
 ModuleNotFoundError: No module named 'acl'
 ```
 
-### Use SDPA attention on Ascend
+### 18.2 Use SDPA attention on Ascend
 
-The trainer command must include:
+The training command must include:
 
 ```bash
 --draft-attn-impl sdpa \
 ```
 
-Do not use the default flex attention backend on Ascend. Without this, PyTorch raises:
+Do not use the default flex attention backend on Ascend. Without this, PyTorch may raise:
 
 ```text
 ValueError: FlexAttention is only supported on CUDA, CPU or HPU devices. Found input tensors on npu device.
 ```
 
-### TensorBoard
+### 18.3 TensorBoard
 
 If the script uses:
 
@@ -562,7 +951,7 @@ If the script uses:
 --logger tensorboard
 ```
 
-then the env must include:
+then install:
 
 ```bash
 python -m pip install tensorboard
@@ -570,9 +959,9 @@ python -m pip install tensorboard
 
 ---
 
-## 15. Current Qwen3-4B training configuration
+## 19. Current Qwen3-4B DFlash training configuration
 
-The working script uses:
+The working script uses the following configuration style:
 
 ```bash
 MODEL="/home/n84449292/m84379596/Huggingface/models--Qwen--Qwen3-4B/snapshots/1cfa9a7208912126459214e8b04321603b3df60c/"
@@ -603,23 +992,30 @@ DRAFT_VOCAB_SIZE=151936
 MASK_TOKEN_ID=151669
 ```
 
-The critical training argument is:
+Important argument:
 
 ```bash
 --draft-attn-impl sdpa
 ```
 
+Resource split:
+
+- NPU 0 runs vLLM/data-generation server.
+- NPUs 1-7 run training.
+- `VLLM_DP=1` uses one vLLM data-parallel worker.
+- `NUM_TRAIN_NPUS=7` launches training on seven NPUs.
+
 ---
 
-## 16. Run training
+## 20. Run training
 
-First clean stale processes:
+Clean stale processes first:
 
 ```bash
 pkill -9 -f "vllm serve|EngineCore|APIServer|launch_vllm.py|torchrun|scripts/train.py" 2>/dev/null || true
 ```
 
-Then run:
+Run:
 
 ```bash
 conda activate /home/n84449292/m84379596/conda/vllm-ascend-0202
@@ -632,7 +1028,7 @@ bash examples/ascend_npu_dflash/dflash_qwen3_4b.sh \
   2>&1 | tee logs/qwen3_4b_dflash_0202.log
 ```
 
-Expected healthy signs:
+Healthy signs:
 
 ```text
 Server ready after ...s.
@@ -640,118 +1036,29 @@ POST /v1/completions HTTP/1.1" 200 OK
 Epoch 0 ...
 ```
 
----
-
-## 17. Common errors and fixes
-
-### Error: `load_and_preprocess_dataset() got an unexpected keyword argument 'trust_remote_code'`
-
-Cause: Python imported an older `speculators` package.
-
-Fix:
+Useful live monitoring:
 
 ```bash
-export PYTHONPATH="$SPEC_MAIN/speculators/src:$SPEC_MAIN/vllm:$SPEC_MAIN/vllm-ascend:${PYTHONPATH:-}"
-```
-
-Then verify:
-
-```bash
-python - <<'PY'
-import inspect
-import speculators
-from speculators.data_generation.preprocessing import load_and_preprocess_dataset
-print(speculators.__file__)
-print(inspect.signature(load_and_preprocess_dataset))
-PY
-```
-
-The signature must include:
-
-```text
-trust_remote_code
+npu-smi info
+tail -f logs/qwen3_4b_dflash_0202.log
 ```
 
 ---
 
-### Error: `Glm47MoeModelToolParser has no attribute _extract_tool_call_regions`
+## 21. Development workflow with submodules
 
-Cause: incompatible `vllm` and `vllm-ascend` commits.
+The parent repository only stores submodule commit pointers. It does not store the full contents of `vllm`, `vllm-ascend`, or `speculators`.
 
-Fix: use the compatible pair:
+When modifying a submodule:
 
-```text
-vllm        v0.20.2
-vllm-ascend v0.20.2rc1
-```
+1. Make and test the change inside the submodule.
+2. Commit inside the submodule.
+3. Push the submodule branch to your fork.
+4. Go back to the parent repository.
+5. Commit the updated submodule pointer.
+6. Push the parent repository.
 
-and make sure imports point to the submodules inside `vLLM_NPU_spec_main`.
-
----
-
-### Error: `ModuleNotFoundError: No module named 'acl'`
-
-Cause: CANN Python paths were removed from `PYTHONPATH`.
-
-Fix: clear `PYTHONPATH` before sourcing CANN, not after:
-
-```bash
-unset PYTHONPATH
-source /home/n84449292/m84379596/CANN/CANN9.0.0/ascend-toolkit/set_env.sh
-source /home/n84449292/m84379596/CANN/CANN9.0.0/nnal/atb/set_env.sh
-export PYTHONPATH="$SPEC_MAIN/speculators/src:$SPEC_MAIN/vllm:$SPEC_MAIN/vllm-ascend:${PYTHONPATH:-}"
-```
-
----
-
-### Error: `FlexAttention is only supported on CUDA, CPU or HPU devices. Found input tensors on npu device.`
-
-Cause: DFlash used the default flex attention backend.
-
-Fix: add:
-
-```bash
---draft-attn-impl sdpa \
-```
-
-to the `scripts/train.py` arguments.
-
----
-
-### Error: `ModuleNotFoundError: No module named 'tensorboard'`
-
-Cause: training script uses TensorBoard logger but package is missing.
-
-Fix:
-
-```bash
-python -m pip install tensorboard
-```
-
----
-
-### Warning/conflict: `triton-ascend 3.2.1 requires numpy==1.26.4`
-
-Fix:
-
-```bash
-python -m pip install --force-reinstall numpy==1.26.4
-```
-
----
-
-## 18. Git workflow for submodules
-
-The parent repo only stores pointers to submodule commits. It does not directly store the full contents of `vllm`, `vllm-ascend`, or `speculators`.
-
-When modifying a submodule, always:
-
-1. Commit inside the submodule.
-2. Push the submodule branch to your fork.
-3. Commit the updated submodule pointer in the parent repo.
-4. Push the parent repo.
-
-### Example: modifying speculators
+### 21.1 Example: modifying speculators
 
 ```bash
 export SPEC_MAIN=/home/n84449292/m84379596/DFlash/vLLM_NPU_spec_main
@@ -764,7 +1071,7 @@ git commit -m "Update Qwen3-4B Ascend DFlash training script"
 git push origin spec_main
 ```
 
-Then update parent pointer:
+Then update the parent pointer:
 
 ```bash
 cd "$SPEC_MAIN"
@@ -775,7 +1082,7 @@ git commit -m "Update speculators submodule pointer"
 git push origin spec_main
 ```
 
-### Example: modifying vLLM
+### 21.2 Example: modifying vLLM
 
 ```bash
 cd "$SPEC_MAIN/vllm"
@@ -791,7 +1098,7 @@ git commit -m "Update vLLM submodule pointer"
 git push origin spec_main
 ```
 
-### Example: modifying vllm-ascend
+### 21.3 Example: modifying vllm-ascend
 
 ```bash
 cd "$SPEC_MAIN/vllm-ascend"
@@ -809,16 +1116,16 @@ git push origin spec_main
 
 ---
 
-## 19. Pulling future official changes
+## 22. Pulling upstream changes
 
-Each submodule has:
+Each submodule should have:
 
 ```text
 origin   = your fork
 upstream = official vllm-project repo
 ```
 
-### Pull official changes into vLLM
+### 22.1 Pull official changes into vLLM
 
 ```bash
 cd "$SPEC_MAIN/vllm"
@@ -834,7 +1141,7 @@ git commit -m "Update vLLM submodule from upstream"
 git push origin spec_main
 ```
 
-### Pull official changes into vllm-ascend
+### 22.2 Pull official changes into vllm-ascend
 
 ```bash
 cd "$SPEC_MAIN/vllm-ascend"
@@ -850,7 +1157,7 @@ git commit -m "Update vllm-ascend submodule from upstream"
 git push origin spec_main
 ```
 
-### Pull official changes into speculators
+### 22.3 Pull official changes into speculators
 
 ```bash
 cd "$SPEC_MAIN/speculators"
@@ -866,11 +1173,13 @@ git commit -m "Update speculators submodule from upstream"
 git push origin spec_main
 ```
 
+If an upstream merge changes dependencies or compiled code, rerun the relevant installation step.
+
 ---
 
-## 20. Checkout or test a specific official PR
+## 23. Testing or merging official PRs
 
-Example for `speculators` PR:
+Example for a `speculators` PR:
 
 ```bash
 cd "$SPEC_MAIN/speculators"
@@ -892,19 +1201,290 @@ git commit -m "Merge speculators PR 589"
 git push origin spec_main
 ```
 
-The same pattern works for `vllm` and `vllm-ascend`.
+The same pattern works for `vllm` and `vllm-ascend`:
+
+```bash
+cd "$SPEC_MAIN/vllm"
+git fetch upstream pull/<PR_NUMBER>/head:pr-<PR_NUMBER>
+git switch pr-<PR_NUMBER>
+```
 
 ---
 
-## 21. Final health checklist
+## 24. Troubleshooting
 
-Before training, run:
+### 24.1 GitHub port 22 timeout
+
+Symptom:
+
+```text
+ssh: connect to host github.com port 22: Connection timed out
+```
+
+Fix: use `ssh.github.com` on port 443 through `github-real`.
+
+```bash
+ssh -T github-real
+```
+
+Expected:
+
+```text
+Hi <username>! You've successfully authenticated...
+```
+
+### 24.2 `github-real` cannot resolve
+
+Symptom:
+
+```text
+ssh: Could not resolve hostname github-real: Name or service not known
+```
+
+Cause: `~/.ssh/config` does not define `Host github-real`.
+
+Fix: create or repair `~/.ssh/config`.
+
+### 24.3 Invalid proxy port
+
+Symptom:
+
+```text
+Ncat: Invalid proxy port number "YOUR_PROXY_PORT". QUITTING.
+```
+
+Cause: SSH config still contains placeholder values.
+
+Fix: replace `<PROXY_HOST>`, `<PROXY_PORT>`, `<PROXY_USER>`, and `<PROXY_PASSWORD>` with real values, or remove the proxy command if proxy is not needed.
+
+### 24.4 Submodules fail with SSL certificate error
+
+Symptom:
+
+```text
+fatal: unable to access 'https://github.com/...': SSL certificate problem: self signed certificate in certificate chain
+```
+
+Fix: use SSH URLs for submodules.
+
+```bash
+cd "$SPEC_MAIN"
+
+git submodule set-url speculators git@github-real:MohammadMahdi1375/speculators.git
+git submodule set-url vllm git@github-real:MohammadMahdi1375/vllm.git
+git submodule set-url vllm-ascend git@github-real:MohammadMahdi1375/vllm-ascend.git
+
+git submodule sync --recursive
+
+git config --global url."git@github-real:".insteadOf "https://github.com/"
+
+git submodule update --init --recursive --jobs 3
+```
+
+Avoid using:
+
+```bash
+git config --global http.sslVerify false
+```
+
+unless absolutely necessary.
+
+### 24.5 `fatal: not a git repository`
+
+Symptom:
+
+```text
+fatal: not a git repository (or any parent up to mount point /)
+```
+
+Cause: command was run in `/home/n84449292/m84379596/DFlash`, not inside the parent Git repo.
+
+Fix:
+
+```bash
+cd /home/n84449292/m84379596/DFlash/vLLM_NPU_spec_main
+git status
+```
+
+### 24.6 NNAL/ATB `set_env.sh` missing
+
+Symptom:
+
+```text
+-bash: /home/n84449292/m84379596/CANN/CANN9.0.0/nnal/atb/set_env.sh: No such file or directory
+```
+
+Check:
+
+```bash
+find /home/n84449292/m84379596/CANN/CANN9.0.0 -name set_env.sh
+```
+
+If no ATB path exists, reinstall NNAL:
+
+```bash
+cd /home/n84449292/m84379596/CANN_9.0.0
+
+export CANN_ROOT=/home/n84449292/m84379596/CANN/CANN9.0.0
+
+./Ascend-cann-nnal_9.0.0_linux-aarch64.run \
+  --install \
+  --install-path="$CANN_ROOT"
+```
+
+### 24.7 EULA prompt interrupted installation
+
+Symptom: installer prints EULA and returns to shell without success.
+
+Fix: rerun each installer and type `Y` when prompted. Install order:
+
+```text
+toolkit → 910B ops → NNAL/ATB
+```
+
+### 24.8 `ModuleNotFoundError: No module named 'acl'`
+
+Cause: CANN Python paths were removed from `PYTHONPATH`.
+
+Correct order:
+
+```bash
+unset PYTHONPATH
+source /home/n84449292/m84379596/CANN/CANN9.0.0/ascend-toolkit/set_env.sh
+source /home/n84449292/m84379596/CANN/CANN9.0.0/nnal/atb/set_env.sh
+export PYTHONPATH="$SPEC_MAIN/speculators/src:$SPEC_MAIN/vllm:$SPEC_MAIN/vllm-ascend:${PYTHONPATH:-}"
+```
+
+Wrong order:
+
+```bash
+source /home/n84449292/m84379596/CANN/CANN9.0.0/ascend-toolkit/set_env.sh
+unset PYTHONPATH
+```
+
+### 24.9 `CUDA_HOME is not set` during vLLM install
+
+Cause: plain `pip install vllm` or an incorrect vLLM build path tried to build CUDA components.
+
+Fix:
+
+```bash
+cd "$SPEC_MAIN/vllm"
+VLLM_TARGET_DEVICE=empty python -m pip install -e .
+```
+
+### 24.10 `Glm47MoeModelToolParser has no attribute _extract_tool_call_regions`
+
+Cause: incompatible `vllm` and `vllm-ascend` commits.
+
+Fix:
+
+- keep `vllm` and `vllm-ascend` on the compatible submodule commits;
+- ensure Python imports point to the submodules inside `vLLM_NPU_spec_main`;
+- do not accidentally import a pip-installed global version.
+
+Check:
+
+```bash
+python - <<'PY'
+import vllm
+import vllm_ascend
+print(vllm.__file__)
+print(vllm_ascend.__file__)
+PY
+```
+
+### 24.11 `load_and_preprocess_dataset() got an unexpected keyword argument 'trust_remote_code'`
+
+Cause: Python imported an older `speculators` package.
+
+Fix:
+
+```bash
+export PYTHONPATH="$SPEC_MAIN/speculators/src:$SPEC_MAIN/vllm:$SPEC_MAIN/vllm-ascend:${PYTHONPATH:-}"
+
+python - <<'PY'
+import inspect
+import speculators
+from speculators.data_generation.preprocessing import load_and_preprocess_dataset
+
+print(speculators.__file__)
+print(inspect.signature(load_and_preprocess_dataset))
+PY
+```
+
+The signature should include `trust_remote_code`.
+
+### 24.12 FlexAttention not supported on NPU
+
+Symptom:
+
+```text
+ValueError: FlexAttention is only supported on CUDA, CPU or HPU devices. Found input tensors on npu device.
+```
+
+Fix: add this to the training command:
+
+```bash
+--draft-attn-impl sdpa \
+```
+
+### 24.13 Missing TensorBoard
+
+Symptom:
+
+```text
+ModuleNotFoundError: No module named 'tensorboard'
+```
+
+Fix:
+
+```bash
+python -m pip install tensorboard
+```
+
+### 24.14 NumPy conflict with triton-ascend
+
+Symptom:
+
+```text
+triton-ascend 3.2.1 requires numpy==1.26.4
+```
+
+Fix:
+
+```bash
+python -m pip install --force-reinstall numpy==1.26.4
+```
+
+### 24.15 Editable installs and conda-pack
+
+Editable installs are expected for development. Some packaging tools such as `conda-pack` may fail or warn because `vllm`, `vllm-ascend`, and `speculators` are installed in editable mode. This is normal for a source-development environment.
+
+---
+
+## 25. Minimal rerun checklist
+
+Use this when the setup has already been installed and you only want to rerun training.
 
 ```bash
 conda activate /home/n84449292/m84379596/conda/vllm-ascend-0202
 
 export SPEC_MAIN=/home/n84449292/m84379596/DFlash/vLLM_NPU_spec_main
 
+pkill -9 -f "vllm serve|EngineCore|APIServer|launch_vllm.py|torchrun|scripts/train.py" 2>/dev/null || true
+
+cd "$SPEC_MAIN/speculators"
+
+mkdir -p logs
+
+bash examples/ascend_npu_dflash/dflash_qwen3_4b.sh \
+  2>&1 | tee logs/qwen3_4b_dflash_0202.log
+```
+
+Before rerunning, confirm:
+
+```bash
 python - <<'PY'
 import acl
 import torch
@@ -924,32 +1504,35 @@ print("speculators:", speculators.__file__)
 PY
 ```
 
-Expected:
+Expected source paths:
 
 ```text
-acl OK
-torch: 2.10.0+cpu
-torch_npu: 2.10.0
-NPU available: True
-NPU count: 8
-vllm: /home/n84449292/m84379596/DFlash/vLLM_NPU_spec_main/vllm/vllm/__init__.py
-vllm_ascend: /home/n84449292/m84379596/DFlash/vLLM_NPU_spec_main/vllm-ascend/vllm_ascend/__init__.py
-speculators: /home/n84449292/m84379596/DFlash/vLLM_NPU_spec_main/speculators/src/speculators/__init__.py
+/home/n84449292/m84379596/DFlash/vLLM_NPU_spec_main/vllm/
+/home/n84449292/m84379596/DFlash/vLLM_NPU_spec_main/vllm-ascend/
+/home/n84449292/m84379596/DFlash/vLLM_NPU_spec_main/speculators/
 ```
-
-If the paths do not match, fix `PYTHONPATH` before running training.
 
 ---
 
-## 22. Minimal rerun command
+## 26. Quick status commands
+
+Useful commands during development:
 
 ```bash
-conda activate /home/n84449292/m84379596/conda/vllm-ascend-0202
+# Parent repo status
+cd /home/n84449292/m84379596/DFlash/vLLM_NPU_spec_main
+git status
+git submodule status --recursive
 
-pkill -9 -f "vllm serve|EngineCore|APIServer|launch_vllm.py|torchrun|scripts/train.py" 2>/dev/null || true
+# Show submodule branches and remotes
+git submodule foreach 'echo "=== $name ==="; git branch --show-current; git remote -v'
 
-cd /home/n84449292/m84379596/DFlash/vLLM_NPU_spec_main/speculators
+# Check installed Python packages
+python -m pip list | grep -Ei 'vllm|torch|npu|triton|numpy|speculators'
 
-bash examples/ascend_npu_dflash/dflash_qwen3_4b.sh \
-  2>&1 | tee logs/qwen3_4b_dflash_0202.log
+# Check NPU state
+npu-smi info
+
+# Check CANN/ATB libraries in env
+echo "$LD_LIBRARY_PATH" | tr ':' '\n' | grep -Ei 'ascend|atb' | head -50
 ```
