@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Build
+build/
+dist/
+csrc/build/
+*.so
+
+# Testing / linting
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local environments
+.venv/
+
+# Experiment outputs
+wandb/
+output/
+
+# Local backups
+*.bak
+*.before_rng_fix
+
+# Logs
+*.log
