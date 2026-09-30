@@ -1,0 +1,246 @@
+{
+  "format": 4,
+  "complete": true,
+  "method": "dflash_prefix_combined_validate_bs16",
+  "base_url": "http://127.0.0.1:8209",
+  "model": "qwen3-4b-dflash",
+  "model_info": {
+    "id": "qwen3-4b-dflash",
+    "object": "model",
+    "created": 1790639713,
+    "owned_by": "vllm",
+    "root": "/home/n84449292/m84379596/Huggingface/models--Qwen--Qwen3-4B/snapshots/1cfa9a7208912126459214e8b04321603b3df60c",
+    "parent": null,
+    "max_model_len": 32768,
+    "permission": [
+      {
+        "id": "modelperm-801dfc61e4516d18",
+        "object": "model_permission",
+        "created": 1790639713,
+        "allow_create_engine": false,
+        "allow_sampling": true,
+        "allow_logprobs": true,
+        "allow_search_indices": false,
+        "allow_view": true,
+        "allow_fine_tuning": false,
+        "organization": "*",
+        "group": null,
+        "is_blocking": false
+      }
+    ]
+  },
+  "manifest_sha256": "b2953f97c3e28fb43fa667c76813b926ec06f09d02644ab67f0c3ae02aecd9dd",
+  "comparison_settings": {
+    "target_config_sha256": "8ba006f74fecfaaeb392872a60f4a480e7ec9860153d2e1b769ec81f9a147f8a",
+    "tokenizer_sha256": {
+      "tokenizer.json": "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4",
+      "tokenizer_config.json": "d5d09f07b48c3086c508b30d1c9114bd1189145b74e982a265350c923acd8101"
+    },
+    "generation_seed": 42,
+    "prompt_seed": 42,
+    "max_new_tokens": 2048,
+    "max_sequence_length": 32768,
+    "eos_token_ids": [
+      151645,
+      151643
+    ],
+    "thinking": false,
+    "concurrencies": [
+      1
+    ],
+    "temperatures": [
+      0.0
+    ],
+    "resolved_sampling": {
+      "0": {
+        "temperature": 0.0,
+        "top_p": 1.0,
+        "top_k": -1,
+        "min_p": 0.0,
+        "max_tokens": 2048,
+        "seed": 42,
+        "presence_penalty": 0.0,
+        "frequency_penalty": 0.0,
+        "repetition_penalty": 1.0,
+        "min_tokens": 0,
+        "ignore_eos": false,
+        "stop_token_ids": [
+          151645,
+          151643
+        ],
+        "skip_special_tokens": true
+      }
+    },
+    "sampling_protocol": "manual-vllm",
+    "stream": true,
+    "n": 1,
+    "target_weight_identity": null,
+    "runtime_identity": null
+  },
+  "temperatures": [
+    0.0
+  ],
+  "concurrencies": [
+    1
+  ],
+  "datasets": [
+    "gsm8k"
+  ],
+  "server_manifest": null,
+  "eval_code_sha256": "4ed4088bbc0e3b65582c61ed735d163fe7b68db8f44651bcf43b618e3f58bee6",
+  "argv": [
+    "evaluator.py",
+    "--base-url",
+    "http://127.0.0.1:8209",
+    "--model",
+    "qwen3-4b-dflash",
+    "--method",
+    "dflash_prefix_combined_validate_bs16",
+    "--datasets",
+    "gsm8k",
+    "--manifest",
+    "./retrace_eval_prompts_all_v2.json",
+    "--num-prompts",
+    "128",
+    "--temperature",
+    "0",
+    "--top-p",
+    "1.0",
+    "--top-k",
+    "-1",
+    "--max-new-tokens",
+    "2048",
+    "--concurrency",
+    "1",
+    "--seed",
+    "42",
+    "--prompt-seed",
+    "42",
+    "--warmup-requests",
+    "1",
+    "--selector-warmup-tokens",
+    "512",
+    "--selector-warmup-steps",
+    "32",
+    "--no-thinking",
+    "--output",
+    "results/dflash_prefix_combined_validate_bs16_20260929_075513"
+  ],
+  "paper": "https://arxiv.org/pdf/2608.29748",
+  "cells": [
+    {
+      "benchmark": "gsm8k",
+      "temperature": 0.0,
+      "concurrency": 1,
+      "sampling": {
+        "temperature": 0.0,
+        "top_p": 1.0,
+        "top_k": -1,
+        "min_p": 0.0,
+        "max_tokens": 2048,
+        "seed": 42,
+        "presence_penalty": 0.0,
+        "frequency_penalty": 0.0,
+        "repetition_penalty": 1.0,
+        "min_tokens": 0,
+        "ignore_eos": false,
+        "stop_token_ids": [
+          151645,
+          151643
+        ],
+        "skip_special_tokens": true
+      },
+      "summary": {
+        "requests": 128,
+        "output_tokens": 37874,
+        "wall_seconds": 375.5816671100911,
+        "summed_request_seconds": 375.5361524098553,
+        "tokens_per_second": 100.85313958977991,
+        "wall_tokens_per_second": 100.84091774612182,
+        "request_tokens_per_second_mean": 108.00332105862371,
+        "latency_seconds_mean": 2.9338761907019943,
+        "ttft_ms_mean": 54.07198515786149,
+        "tpot_ms_request_mean": 9.425829934157495,
+        "engine_ttft_ms_mean": 48.62347374182718,
+        "engine_mean_itl_ms_request_mean": 9.42720885636101,
+        "verification_rounds": 6732,
+        "accepted_draft_tokens": 31014,
+        "drafted_tokens": 100980,
+        "accepted_per_round_pooled": 4.606951871657754,
+        "acceptance_length_with_bonus_pooled": 5.606951871657754,
+        "acceptance_length_with_bonus_request_mean": 6.040314793025832,
+        "draft_acceptance_rate": 0.3071301247771836,
+        "acceptance_histogram": [
+          1112,
+          1000,
+          797,
+          610,
+          558,
+          453,
+          367,
+          300,
+          238,
+          207,
+          188,
+          161,
+          134,
+          112,
+          116,
+          379
+        ],
+        "per_position_acceptance_rate": [
+          0.8348187759952466,
+          0.6862745098039216,
+          0.5678847296494355,
+          0.4772727272727273,
+          0.39438502673796794,
+          0.3270944741532977,
+          0.2725787284610814,
+          0.2280154486036839,
+          0.19266191325014853,
+          0.16191325014854427,
+          0.13398692810457516,
+          0.11007130124777184,
+          0.09016636957813429,
+          0.07352941176470588,
+          0.05629827688651218
+        ],
+        "acceptance_source": "per_request_api",
+        "counters_crosscheck": true,
+        "exclusive_server_interval": true,
+        "measurement_valid": true,
+        "length_limited_requests": 0,
+        "greedy_parity": null,
+        "comparison_valid": null,
+        "speedup_tps": null,
+        "speedup_total_latency": null,
+        "speedup_request_tps_mean": null
+      }
+    }
+  ],
+  "limits": [
+    "Stored-response training and Ascend vLLM are adaptations, not an exact paper-table reproduction.",
+    "Acceptance length=1+accepted draft tokens/verification rounds (bonus convention).",
+    "MT-Bench uses the frozen first-turn policy.",
+    "Streaming is retained so TTFT and per-request speculative metrics remain available.",
+    "Generated benchmark programs are never executed by this evaluator."
+  ],
+  "performance_measurement": true,
+  "startup_warmup": {
+    "enabled": true,
+    "requests": 1,
+    "completion_tokens": 512,
+    "verification_rounds": 76,
+    "num_speculative_tokens": 15,
+    "required_verification_rounds": 32,
+    "counter_sources": [
+      "per_request_api"
+    ],
+    "excluded_from_measurement": true,
+    "complete": true
+  },
+  "prefix_runtime_confirmation": {
+    "verified": false,
+    "reason": "No integrated launch manifest provided"
+  }
+}

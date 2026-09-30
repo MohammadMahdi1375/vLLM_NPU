@@ -1,0 +1,2 @@
+method,temperature,benchmark,requests,tokens_per_second,acceptance_length_with_bonus_pooled,acceptance_length_with_bonus_request_mean,draft_acceptance_rate,ttft_ms_mean,tpot_ms_request_mean
+dflash_prefix_same_checkpoint_fast,0.0,gsm8k,128,82.77139463967315,4.8050968664672995,4.980780819350312,0.5435852666381856,61.44429663254414,11.693387810979875
