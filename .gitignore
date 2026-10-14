@@ -1,0 +1,12 @@
+
+# Only track these four project directories at the repository root
+/*
+!/.gitignore
+!/.gitmodules
+!/Evaluator/
+!/speculators/
+!/vllm/
+!/vllm-ascend/
+
+# Never track evaluation results
+/Evaluator/results/
