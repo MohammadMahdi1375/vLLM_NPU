@@ -1,102 +1,106 @@
 #!/usr/bin/env bash
-# Qwen3-4B + dspark; standalone vLLM server.
-# Usage: DEVICES=0 bash run_server_dspark.sh
 set -eo pipefail
 
-ENV_ROOT="${ENV_ROOT:-/home/n84449292/m84379596/conda/vllm-dflash2-main}"
-SPEC_MAIN="${SPEC_MAIN:-/home/n84449292/m84379596/DFlash/vLLM_NPU_spec_main}"
-CANN_ROOT="${CANN_ROOT:-/home/n84449292/m84379596/CANN/9.1.0}"
-PYTHON_BIN="${PYTHON_BIN:-$ENV_ROOT/bin/python}"
+# ============================================================
+# Qwen3-4B + DSpark on Ascend (checkpoint 0)
+# Baseline serving setup matched to run_server_dflash.sh.
+# ============================================================
 
-TARGET="${TARGET:-/home/n84449292/m84379596/Huggingface/models--Qwen--Qwen3-4B/snapshots/1cfa9a7208912126459214e8b04321603b3df60c}"
-DRAFT="${DRAFT:-/home/n84449292/m84379596/DFlash/vLLM_NPU_spec_main/output/dspark_qwen3_4b_5epoch_fullvocab_markov/checkpoints/0}"
-PORT="${PORT:-8111}"
-HOST="${HOST:-127.0.0.1}"
-DEVICES="${DEVICES:-4}"
-SERVED_MODEL="${SERVED_MODEL:-qwen3-4b-dspark}"
-MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
-GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.90}"
+ENV_ROOT="/home/n84449292/m84379596/conda/vllm-ascend-0202"
+SPEC_MAIN="/home/n84449292/m84379596/DFlash/vLLM_NPU_spec_main"
+CANN_ROOT="/home/n84449292/m84379596/CANN/9.1.0"
+PYTHON_BIN="$ENV_ROOT/bin/python"
 
-# The current ReTrace native implementation uses TP=1 and the V1 runner.
-# Use the same settings for the two official checkpoints for comparison.
-if [[ "${TP_SIZE:-1}" != 1 || ! "$DEVICES" =~ ^[0-9]+$ ]]; then
-  echo "Use one logical NPU: DEVICES=0 TP_SIZE=1 bash run_server_dspark.sh" >&2
-  exit 1
-fi
-for checkpoint in "$TARGET" "$DRAFT"; do
-  if [[ ! -f "$checkpoint/config.json" ]]; then
-    echo "Missing checkpoint config: $checkpoint/config.json" >&2
-    exit 1
-  fi
-done
-test -x "$PYTHON_BIN" || { echo "Python not found: $PYTHON_BIN" >&2; exit 1; }
+# Target/verifier: original Qwen3-4B, never the draft checkpoint.
+TARGET_MODEL="/home/n84449292/m84379596/Huggingface/models--Qwen--Qwen3-4B/snapshots/1cfa9a7208912126459214e8b04321603b3df60c"
+
+# Trained DSpark drafter: block_size=16; Markov + confidence heads.
+DRAFT_MODEL="$SPEC_MAIN/output/dspark_qwen3_4b_openperfectblend_bs16/dspark_qwen3_4b_openperfectblend/checkpoints/0"
+
+# Ascend fused attention currently supports <=16 verification tokens,
+# including the target bonus token: K + 1 <= 16.
+NUM_SPECULATIVE_TOKENS=15
+
+# Simple sanity checks for accidentally wrong paths.
+[[ -x "$PYTHON_BIN" ]] || { echo "Missing Python: $PYTHON_BIN" >&2; exit 1; }
+[[ -f "$TARGET_MODEL/config.json" ]] || { echo "Missing target config: $TARGET_MODEL/config.json" >&2; exit 1; }
+[[ -f "$DRAFT_MODEL/config.json" ]] || { echo "Missing DSpark config: $DRAFT_MODEL/config.json" >&2; exit 1; }
+
+# ============================================================
+# Environment (same as working DFlash server)
+# ============================================================
+
+unset PYTHONPATH
+unset ASCEND_LAUNCH_BLOCKING
+
+# No DFlash-Prefix selector or NPU-graph special handling for DSpark.
+unset DFLASH_PREFIX_INFERENCE DFLASH_PREFIX_NPU_GRAPH
+unset DFLASH_PREFIX_TOKEN_CACHE DFLASH_PREFIX_PROFILE_STEPS
+unset DFLASH_PREFIX_SCORE_CHECK DFLASH_PREFIX_VALIDATE_STEPS
 
 source "$CANN_ROOT/ascend-toolkit/set_env.sh"
 source "$CANN_ROOT/nnal/atb/set_env.sh"
 
+export SOC_VERSION=ascend910_9372
 export PYTHONPATH="$SPEC_MAIN/vllm:$SPEC_MAIN/vllm-ascend:$SPEC_MAIN/speculators/src:$SPEC_MAIN/speculators/hs_connectors/src${PYTHONPATH:+:$PYTHONPATH}"
-export LD_LIBRARY_PATH="$ENV_ROOT/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-# Select the Conda C++ runtime needed by this environment's SQLite/ICU.
+export LD_LIBRARY_PATH="$ENV_ROOT/lib:${LD_LIBRARY_PATH:-}"
+
 if [[ -f "$ENV_ROOT/lib/libstdc++.so.6" ]]; then
-  export LD_PRELOAD="$ENV_ROOT/lib/libstdc++.so.6${LD_PRELOAD:+:$LD_PRELOAD}"
+    export LD_PRELOAD="$ENV_ROOT/lib/libstdc++.so.6"
 fi
-export ASCEND_RT_VISIBLE_DEVICES="$DEVICES"
+
+export ASCEND_RT_VISIBLE_DEVICES=7
 export VLLM_USE_V2_MODEL_RUNNER=0
 export VLLM_ASCEND_BALANCE_SCHEDULING=0
+
 export PYTHONUNBUFFERED=1
 export OMP_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 export OMP_PROC_BIND=false
+
 export HCCL_CONNECT_TIMEOUT=3600
 export VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS=3000
 export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
-export NO_PROXY="localhost,127.0.0.1${NO_PROXY:+,$NO_PROXY}"
+
+export NO_PROXY="localhost,127.0.0.1"
 export no_proxy="$NO_PROXY"
 
-# JSON encoding handles checkpoint paths without shell quoting assumptions.
-SPEC_CONFIG=$("$PYTHON_BIN" - "$DRAFT" <<'PY'
-import json
-import sys
-print(json.dumps({
-    "method": "dspark",
-    "model": sys.argv[1],
-    "num_speculative_tokens": 8,
-    "draft_sample_method": "greedy",
-    "disable_padded_drafter_batch": False,
-    "enable_adaptive_verification": False,
-    "enforce_eager": True,
-}))
-PY
-)
+# ============================================================
+# Start DSpark server
+# ============================================================
 
-echo "Model: $SERVED_MODEL | NPU: $DEVICES | port: $PORT"
-echo "Target: $TARGET"
-echo "Draft: $DRAFT"
-
-# Avoid importing the outer vllm checkout as a namespace package.
 cd "$SPEC_MAIN/speculators"
-exec "$PYTHON_BIN" -m vllm.entrypoints.cli.main serve "$TARGET" \
-  --host "$HOST" \
-  --port "$PORT" \
-  --served-model-name "$SERVED_MODEL" \
-  --tensor-parallel-size 1 \
-  --data-parallel-size 1 \
-  --dtype bfloat16 \
-  --seed 42 \
-  --generation-config vllm \
-  --max-num-seqs 1 \
-  --max-model-len "$MAX_MODEL_LEN" \
-  --max-num-batched-tokens "$MAX_MODEL_LEN" \
-  --block-size 128 \
-  --gpu-memory-utilization "$GPU_MEMORY_UTILIZATION" \
-  --enforce-eager \
-  --no-async-scheduling \
-  --no-enable-prefix-caching \
-  --no-enable-chunked-prefill \
-  --api-server-count 1 \
-  --renderer-num-workers 1 \
-  --additional-config '{"enable_reduce_sample": false}' \
-  --enable-per-request-metrics \
-  --per-request-spec-decode-metrics summary \
-  --speculative-config "$SPEC_CONFIG" \
-  "$@"
+
+exec "$PYTHON_BIN" \
+    -m vllm.entrypoints.cli.main \
+    serve "$TARGET_MODEL" \
+    --host 127.0.0.1 \
+    --port 8212 \
+    --served-model-name qwen3-4b-dspark \
+    --tensor-parallel-size 1 \
+    --data-parallel-size 1 \
+    --dtype bfloat16 \
+    --seed 42 \
+    --generation-config vllm \
+    --max-num-seqs 1 \
+    --max-model-len 32768 \
+    --max-num-batched-tokens 32768 \
+    --block-size 128 \
+    --gpu-memory-utilization 0.96 \
+    --enforce-eager \
+    --no-async-scheduling \
+    --no-enable-prefix-caching \
+    --no-enable-chunked-prefill \
+    --api-server-count 1 \
+    --renderer-num-workers 1 \
+    --additional-config '{"enable_reduce_sample": false}' \
+    --enable-per-request-metrics \
+    --per-request-spec-decode-metrics summary \
+    --speculative-config "{
+        \"method\": \"dspark\",
+        \"model\": \"$DRAFT_MODEL\",
+        \"num_speculative_tokens\": $NUM_SPECULATIVE_TOKENS,
+        \"draft_sample_method\": \"greedy\",
+        \"enable_adaptive_verification\": false,
+        \"enforce_eager\": true
+    }"
