@@ -25,26 +25,25 @@ With no server manifest, confirm in the server terminal that it prints:
 PREFIX_PARITY_PASS ... mode=fast npu_graph=True; steady-state fast path enabled
 
 cd /home/n84449292/m84379596/DFlash/vLLM_NPU_spec_main/Evaluator
+
 python evaluator.py \
-  --base-url http://127.0.0.1:8212 \
-  --model qwen3-4b-dflash \
-  --method dflash_prefix_graph \
-  --datasets all \
+  --base-url http://127.0.0.1:8213 \
+  --model qwen3-4b-spec \
+  --datasets gsm8k \
+  --manifest ./retrace_eval_prompts_all_v2.json \
   --num-prompts 128 \
-  --temperature 0 \
+  --temperatures 0 \
+  --concurrencies 1 \
   --top-p 1.0 \
   --top-k -1 \
   --max-new-tokens 2048 \
-  --concurrency 1 \
   --seed 42 \
   --prompt-seed 42 \
   --warmup-requests 1 \
   --selector-warmup-tokens 512 \
   --selector-warmup-steps 32 \
   --no-thinking \
-  --rebuild-manifest \
-  --manifest retrace_eval_prompts_all_v2.json \
-  --output "results/dflash_prefix_bs16_ep1_compiled"
+  --output "results/spec_compare_$(date +%Y%m%d_%H%M%S)"
 
 
 ## --rebuild-manifest
@@ -1132,6 +1131,7 @@ def run_warmups(client, prompts, params, concurrency, count):
 
 INTEGRATED_SERVER_FORMATS = {
     "dflash_evaluator_integration_v1", "dflash_evaluator_integration_v2",
+    "dflash_evaluator_integration_v3",
 }
 
 
@@ -1191,7 +1191,10 @@ def read_server_manifest(path, client, target_config_hash):
           f"token_cache={manifest['prefix_token_cache']}", flush=True)
     if "target_execution_requested" in manifest:
         print(f"Target execution requested: {manifest['target_execution_requested']}; "
-              "draft backbone: eager; full target verification retained.", flush=True)
+              f"draft execution requested: {manifest.get('draft_execution_requested', 'eager')}; "
+              "full target verification retained.", flush=True)
+        if manifest.get("draft_backend_note"):
+            print(manifest["draft_backend_note"], flush=True)
     return manifest
 
 
@@ -1293,6 +1296,28 @@ def confirm_prefix_runtime(manifest):
         if time.monotonic() >= deadline:
             raise ValueError(f"Expected prefix parity marker missing from {log}; inspect the server before timing")
         time.sleep(0.1)
+
+
+def confirm_dspark_runtime(manifest):
+    if not is_integrated_server(manifest) or manifest.get("dspark_head_graph", "off") == "off":
+        return {"verified": False, "reason": "No DSpark graph requested"}
+    mode = manifest["dspark_head_graph"]
+    log = Path(manifest["server_log"])
+    deadline = time.monotonic() + 5
+    while True:
+        text = log.read_text(errors="replace") if log.is_file() else ""
+        if "DSPARK_HEAD_PARITY_FAIL" in text:
+            raise ValueError(f"DSpark parity failure: {log}")
+        pattern = rf"DSPARK_HEAD_PARITY_PASS checked_blocks=(\d+) max_score_error=0 mode={mode} npu_graph=True production_tokens_checked=True"
+        counts = [int(m.group(1)) for m in re.finditer(pattern, text)]
+        if counts and max(counts) >= manifest["dspark_validate_steps"]:
+            if mode == "fast" and "steady-state fast path enabled" not in text:
+                raise ValueError("DSpark steady-state fast path not confirmed")
+            return {"verified": True, "mode": mode, "checked_blocks_at_warmup": max(counts),
+                    "scope": "Observed startup blocks only; not universal parity"}
+        if time.monotonic() >= deadline:
+            raise ValueError(f"DSpark graph parity marker missing: {log}")
+        time.sleep(.1)
 
 
 def main():
@@ -1564,6 +1589,9 @@ def main():
                     "model_runner",
                     "commits",
                     "target_execution_requested",
+                    "speculative_method",
+                    "draft_execution_requested",
+                    "draft_enforce_eager",
                     "compilation_config",
                     "additional_config",
                 )
@@ -1607,14 +1635,14 @@ def main():
     expected_k = None
     integrated = is_integrated_server(server_manifest)
     if integrated:
-        required_steps = max(required_steps, server_manifest["prefix_validate_steps"])
+        required_steps = max(required_steps, server_manifest["prefix_validate_steps"], server_manifest.get("dspark_validate_steps", 0))
         expected_k = server_manifest["num_speculative_tokens"]
         if warmup_tokens:
             warmup_tokens = max(warmup_tokens, server_manifest["block_size"] * required_steps)
     if effective_max_len and len(warmup_prompt["prompt_token_ids"]) + warmup_tokens + 16 > effective_max_len:
         raise ValueError("Startup warmup exceeds the server sequence limit; lower --selector-warmup-tokens or use a shorter prompt")
     report["performance_measurement"] = not (
-        integrated and (server_manifest.get("prefix_mode") == "validate" or server_manifest.get("graph_metrics")))
+        integrated and (server_manifest.get("prefix_mode") == "validate" or server_manifest.get("dspark_head_graph") == "validate" or server_manifest.get("graph_metrics")))
     report["startup_warmup"] = {"complete": False}
 
     try:
@@ -1624,8 +1652,10 @@ def main():
         )
         report["startup_warmup"]["complete"] = True
         report["prefix_runtime_confirmation"] = confirm_prefix_runtime(server_manifest)
-        if integrated and server_manifest["variant"] == "vanilla":
-            print("Vanilla DFlash: no prefix selector checks apply. Target graph settings are recorded.", flush=True)
+        report["dspark_runtime_confirmation"] = confirm_dspark_runtime(server_manifest)
+        if integrated and server_manifest["variant"] in {"vanilla", "dspark"}:
+            family = "DSpark" if server_manifest["variant"] == "dspark" else "Vanilla DFlash"
+            print(f"{family}: no prefix selector checks apply. Target graph settings are recorded.", flush=True)
         elif not report["prefix_runtime_confirmation"]["verified"] and not args.target_only:
             status = "Startup warmup completed." if warmup_tokens else "Startup warmup disabled."
             print(f"{status} The HTTP counters do not identify prefix graph mode. "
@@ -1698,6 +1728,17 @@ def main():
                             settings,
                         )
 
+                    # Retain compact, ordered output identities for cross-method
+                    # greedy parity; never confuse acceptance equality with output equality.
+                    cell["speculative_hashes"] = [hashlib.sha256(json.dumps(
+                        {key: (r.get("speculation") or {}).get(key) for key in
+                         ("rounds", "accepted", "drafted", "k", "histogram")},
+                        sort_keys=True, separators=(",", ":")
+                    ).encode()).hexdigest() for r in rows]
+                    cell["prompt_hashes"] = [r["prompt_sha256"] for r in rows]
+                    cell["output_hashes"] = [hashlib.sha256(json.dumps(
+                        [r["output_token_ids"], r["finish_reason"]], separators=(",", ":")
+                    ).encode()).hexdigest() for r in rows]
                     # Per-request rows are needed only transiently for aggregation/reference checks.
                     # Do not retain or write them after this dataset is summarized.
                     cell.pop("results", None)
@@ -1720,3 +1761,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

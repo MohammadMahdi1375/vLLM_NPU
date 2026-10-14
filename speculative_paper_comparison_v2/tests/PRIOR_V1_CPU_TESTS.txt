@@ -1,0 +1,12 @@
+CPU-only tests. No NPU performance or hardware graph certification.
+
+Full suite (both matched-eager and backend-default simulated HTTP pipelines):
+........................................................................ [ 93%]
+.....                                                                    [100%]
+77 passed in 78.61s (0:01:18)
+
+Final installer/failure-bundle checks after adding compact diagnostics:
+..........                                                               [100%]
+10 passed, 27 deselected in 3.51s
+
+All overlay Python and shell syntax checks passed.

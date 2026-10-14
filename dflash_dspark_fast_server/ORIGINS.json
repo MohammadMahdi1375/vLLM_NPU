@@ -1,0 +1,39 @@
+{
+  "description": "Entrypoint patch against the user's published prefix-attention-qwen3-4b sources. Does not modify vLLM or Ascend kernels.",
+  "sources": [
+    {
+      "path": "speculators/scripts/dflash_prefix_compiled/check_target_graph.py",
+      "url": "https://github.com/MohammadMahdi1375/speculators/blob/prefix-attention-qwen3-4b/scripts/dflash_prefix_compiled/check_target_graph.py",
+      "git_blob_sha": "48edcc4de695e97f00beccc251be905d6033329c"
+    },
+    {
+      "path": "Evaluator/evaluator.py",
+      "url": "https://github.com/MohammadMahdi1375/vLLM_NPU/blob/prefix-attention-qwen3-4b/Evaluator/evaluator.py",
+      "git_blob_sha": "07640bb099035edb8f1e0e52142809b1c5c3148e"
+    },
+    {
+      "path": "speculators/scripts/dflash_prefix_compiled/target_graph_server.py",
+      "url": "https://github.com/MohammadMahdi1375/speculators/blob/prefix-attention-qwen3-4b/scripts/dflash_prefix_compiled/target_graph_server.py",
+      "git_blob_sha": "87888185b45792f7dd1fb28b44d2f4d940f7ff1d"
+    },
+    {
+      "path": "Evaluator/run_server_dflash.sh",
+      "url": "https://github.com/MohammadMahdi1375/vLLM_NPU/blob/prefix-attention-qwen3-4b/Evaluator/run_server_dflash.sh",
+      "git_blob_sha": "f93a535535c95549016df1c889b2cef7ff318c37"
+    },
+    {
+      "path": "Evaluator/run_server_dspark.sh",
+      "url": "https://github.com/MohammadMahdi1375/vLLM_NPU/blob/prefix-attention-qwen3-4b/Evaluator/run_server_dspark.sh",
+      "git_blob_sha": "85a49f477afcc03a390d46b45a35a6f399f8f719"
+    }
+  ],
+  "additional_baseline": {
+    "path": "baselines/Evaluator/run_server_dflash_simple_previous.sh",
+    "origin": "The standalone simple launcher prepared earlier in this conversation."
+  },
+  "runtime_sources_reviewed": [
+    "https://github.com/MohammadMahdi1375/vllm-ascend/blob/prefix-attention-qwen3-4b/vllm_ascend/spec_decode/dspark_proposer.py",
+    "https://github.com/MohammadMahdi1375/vllm-ascend/blob/prefix-attention-qwen3-4b/vllm_ascend/spec_decode/llm_base_proposer.py",
+    "https://github.com/MohammadMahdi1375/vllm/blob/prefix-attention-qwen3-4b/vllm/transformers_utils/configs/speculators/algos.py"
+  ]
+}

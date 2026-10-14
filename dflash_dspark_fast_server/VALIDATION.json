@@ -1,0 +1,35 @@
+{
+  "package": "dflash_dspark_fast_server",
+  "version": 1,
+  "cpu_validation": {
+    "tests_passed": 34,
+    "tests_failed": 0,
+    "command": "target_graph_test_venv/bin/python -m pytest -q --tb=short dflash_dspark_fast_server/tests",
+    "python_syntax": "all package Python sources parsed",
+    "shell_syntax": "all three launchers passed bash -n",
+    "coverage": [
+      "Speculative method selection and mismatch rejection for vanilla DFlash, local_prefix_v2, compiled_prefix_v3 and DSpark",
+      "Block-8/16 proposal counts, DSpark anchor semantics, K+1 verification capture shape and no silent truncation",
+      "Matching target options and non-selector environment across methods",
+      "Optional enforce_eager omission/true/false; reproduction of previous DFlash command/environment with explicit draft eager",
+      "Actual shell launchers and evaluator exercised against a localhost synthetic HTTP/SSE server",
+      "Correct DSpark identity, startup warmup exclusion, unchanged metric and sampling functions",
+      "Configuration-only launches without CANN initialization or live-server registration",
+      "Checksum-verified installation, read-only check, conflict refusal, unrelated edits retained, reinstall, guarded rollback and preserved checkpoint files"
+    ]
+  },
+  "hardware_validation": {
+    "npu_available": false,
+    "cann_execution_tested": false,
+    "dspark_target_graph_parity_tested": false,
+    "throughput_measured": false,
+    "acceptance_length_measured": false
+  },
+  "limits": [
+    "HTTP tests use synthetic counters, not model outputs.",
+    "DSpark's reviewed Ascend proposer disables its draft graph; omission of enforce_eager does not change that source restriction.",
+    "The default omitted speculative enforce_eager differs from the prior DFlash draft-eager recipe. Confirm actual dispatch and parity on A2.",
+    "Launching matched runtime settings cannot certify matched checkpoint training budgets. The known DSpark default is epoch 1.",
+    "No universal token parity, unchanged tau, or speedup is promised."
+  ]
+}

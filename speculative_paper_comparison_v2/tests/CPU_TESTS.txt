@@ -1,0 +1,16 @@
+Installer repair v2 validation
+
+Command:
+target_graph_test_venv/bin/python -m pytest -q speculative_paper_comparison_v2/tests/test_installer.py
+
+Result: 15 passed in 4.50s
+
+Includes exact nine-file uploaded source fixture, no-write preflight, backed-up
+DSpark launcher replacement, preserved local evaluator example, successful
+installation, byte-for-byte rollback, preserved file mode and dummy checkpoint,
+EOF newline counts 0/1/4, genuine Python conflict rejection, CRLF handling,
+symlink rejection, earlier launcher compatibility and idempotence.
+Missing runtime prerequisites in the CPU fixture are stand-ins.
+Every runtime overlay is byte-identical to v1. The prior v1 CPU report is retained
+as PRIOR_V1_CPU_TESTS.txt; the inference suite was not rerun for this installer-only
+repair. No NPU/server execution or throughput benchmark was performed here.
