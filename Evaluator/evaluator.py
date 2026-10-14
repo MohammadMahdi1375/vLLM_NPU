@@ -14,7 +14,9 @@ The frozen prompt manifest is kept separately so different model runs can reuse 
 exact same prompts. No generated benchmark program is executed and no task-accuracy
 score is claimed.
 
-Works with the manually edited run_server_dflash.sh. A server manifest is optional.
+Works with the editable run_server_dflash.sh and its target/selector graph paths.
+For localhost, its current launch record is discovered automatically by port.
+--server-manifest can select a record explicitly; other launchers still work.
 The server controls prefix fast/graph mode; this HTTP client does not enable it.
 Startup warmup defaults to 512 tokens per request and at least 32 reported
 speculative verification rounds, outside all measured intervals. Match
@@ -24,7 +26,7 @@ PREFIX_PARITY_PASS ... mode=fast npu_graph=True; steady-state fast path enabled
 
 cd /home/n84449292/m84379596/DFlash/vLLM_NPU_spec_main/Evaluator
 python evaluator.py \
-  --base-url http://127.0.0.1:8209 \
+  --base-url http://127.0.0.1:8212 \
   --model qwen3-4b-dflash \
   --method dflash_prefix_graph \
   --datasets all \
@@ -40,8 +42,9 @@ python evaluator.py \
   --selector-warmup-tokens 512 \
   --selector-warmup-steps 32 \
   --no-thinking \
+  --rebuild-manifest \
   --manifest retrace_eval_prompts_all_v2.json \
-  --output "results/dflash_prefix_graph_$(date +%Y%m%d_%H%M%S)"
+  --output "results/dflash_prefix_bs16_ep1_compiled"
 
 
 ## --rebuild-manifest
@@ -851,6 +854,8 @@ def compare(cell, reference, reference_report, settings):
     )
     if old is None:
         issues.append("reference cell missing")
+    elif "results" not in old:
+        issues.append("reference has no per-request outputs; output parity cannot be checked")
     elif [r["prompt_sha256"] for r in old["results"]] != [
         r["prompt_sha256"] for r in cell["results"]
     ]:
@@ -1125,18 +1130,52 @@ def run_warmups(client, prompts, params, concurrency, count):
             future.result()
 
 
+INTEGRATED_SERVER_FORMATS = {
+    "dflash_evaluator_integration_v1", "dflash_evaluator_integration_v2",
+}
+
+
+def is_integrated_server(manifest):
+    return bool(manifest and manifest.get("format") in INTEGRATED_SERVER_FORMATS)
+
+
+def check_server_process(manifest):
+    try:
+        pid = int(manifest["launcher_pid"])
+        fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+        valid = fields[19] == str(manifest["launcher_start_ticks"]) and fields[0] != "Z"
+    except (OSError, ValueError, KeyError, IndexError) as exc:
+        raise ValueError("Launch manifest is stale: its server process is not running") from exc
+    if not valid:
+        raise ValueError("Launch manifest is stale: server process identity changed")
+
+
 def read_server_manifest(path, client, target_config_hash):
-    """Read explicit launch provenance; older manifest formats remain supported."""
-    if path is None:
-        return None
-    manifest = json.loads(path.read_text())
-    if manifest.get("served_model") != client.model:
-        raise ValueError("Server provenance file belongs to a different served model")
-    if manifest.get("format") != "dflash_evaluator_integration_v1":
-        return manifest
-    claimed = urlsplit(normalize_url(manifest["base_url"]))
+    """Read this launch's provenance; never use an old log to certify a new server."""
     actual = urlsplit(client.base)
     loopback = {"localhost", "127.0.0.1", "::1"}
+    discovered = path is None
+    if discovered:
+        if actual.hostname not in loopback:
+            return None
+        root = Path(__file__).resolve().parent.parent
+        path = root / "output/evaluator_servers" / f"port_{actual.port or 80}.json"
+        if not path.is_file():
+            return None
+    manifest = json.loads(path.read_text())
+    if discovered:
+        try:
+            check_server_process(manifest)
+        except ValueError as exc:
+            print(f"Ignoring old launch record {path}: {exc}. Current server mode is unverified.", flush=True)
+            return None
+    if manifest.get("served_model", manifest.get("served_model_name")) != client.model:
+        raise ValueError("Server provenance file belongs to a different served model")
+    if not is_integrated_server(manifest):
+        return manifest
+    if manifest.get("check_only"):
+        raise ValueError("A CHECK_ONLY launch record does not identify a running server")
+    claimed = urlsplit(normalize_url(manifest["base_url"]))
     same_host = (claimed.hostname == actual.hostname or
                  claimed.hostname in loopback and actual.hostname in loopback)
     if not same_host or (claimed.port or 80) != (actual.port or 80) or claimed.scheme != actual.scheme:
@@ -1144,17 +1183,15 @@ def read_server_manifest(path, client, target_config_hash):
     if manifest.get("target_config_sha256") != target_config_hash:
         raise ValueError("Launch manifest and evaluator target configurations differ")
     if actual.hostname in loopback:
-        try:
-            pid = int(manifest["launcher_pid"])
-            fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
-        except (OSError, ValueError, KeyError) as exc:
-            raise ValueError("Launch manifest is stale: its server process is not running") from exc
-        if fields[19] != str(manifest["launcher_start_ticks"]) or fields[0] == "Z":
-            raise ValueError("Launch manifest is stale: server process identity changed")
+        check_server_process(manifest)
+    manifest = dict(manifest, manifest_path=str(path.resolve()), automatically_discovered=discovered)
     print(f"Server variant: {manifest['variant']}; draft block: {manifest['block_size']}", flush=True)
     print(f"Target: {manifest['target']}\nDraft:  {manifest['draft']}", flush=True)
     print(f"Prefix mode={manifest.get('prefix_mode')}; graph={manifest['prefix_npu_graph']}; "
           f"token_cache={manifest['prefix_token_cache']}", flush=True)
+    if "target_execution_requested" in manifest:
+        print(f"Target execution requested: {manifest['target_execution_requested']}; "
+              "draft backbone: eager; full target verification retained.", flush=True)
     return manifest
 
 
@@ -1216,7 +1253,7 @@ def run_selector_warmup(client, prompt, params, count, required_steps=32, expect
 
 def confirm_prefix_runtime(manifest):
     """Confirm the current launch's parity marker outside the measured interval."""
-    if not manifest or manifest.get("format") != "dflash_evaluator_integration_v1":
+    if not is_integrated_server(manifest):
         return {"verified": False, "reason": "No integrated launch manifest provided"}
     if manifest["variant"] != "prefix" or manifest["prefix_mode"] == "reference":
         return {"verified": False, "reason": "No optimized prefix runtime requested"}
@@ -1224,27 +1261,35 @@ def confirm_prefix_runtime(manifest):
     graph = manifest["prefix_npu_graph"]
     needed = manifest["prefix_validate_steps"]
     log = Path(manifest["server_log"])
-    pattern = re.compile(r"PREFIX_PARITY_PASS checked_blocks=(\d+)[^\n]*"
+    compiled = manifest.get("kind") == "compiled_prefix_v3"
+    marker = (r"\bCOMPILED_PREFIX_PARITY_PASS kind=compiled_prefix_v3 " if compiled
+              else r"(?<!COMPILED_)\bPREFIX_PARITY_PASS ")
+    pattern = re.compile(marker + r"checked_blocks=(\d+)[^\n]*"
                          + rf"mode={mode} npu_graph={graph}")
     # tee may still be draining the final warmup log line. This is untimed.
     deadline = time.monotonic() + 5
     while True:
         matches = []
-        steady = False
-        with log.open(errors="replace") as stream:
-            for line in stream:
-                match = pattern.search(line)
-                if match:
-                    matches.append(int(match.group(1)))
-                    steady = steady or "steady-state fast path enabled" in line
+        if log.is_file():
+            with log.open(errors="replace") as stream:
+                for line in stream:
+                    if re.search(r"\b(?:COMPILED_)?PREFIX_PARITY_FAIL\b", line):
+                        raise ValueError(f"Selector parity failed in {log}; no fast result can be certified")
+                    match = pattern.search(line)
+                    if match and (mode != "fast" or "steady-state fast path enabled" in line):
+                        if compiled and "production_tokens_checked=True" not in line:
+                            continue
+                        matches.append(int(match.group(1)))
         ready = matches and max(matches) >= needed
-        if ready and (mode != "fast" or steady):
+        if ready:
             if mode == "validate":
                 print("VALIDATION MODE: every block executes reference comparisons; throughput is diagnostic.", flush=True)
             else:
                 print(f"Prefix ready: mode=fast, graph={graph}, initial parity checks completed.", flush=True)
             return {"verified": True, "mode": mode, "npu_graph": graph,
-                    "checked_blocks_at_warmup": max(matches), "server_log": str(log)}
+                    "kind": manifest.get("kind", "local_prefix_v2"),
+                    "checked_blocks_at_warmup": max(matches), "server_log": str(log),
+                    "scope": "Startup selector parity on observed blocks; not universal output parity"}
         if time.monotonic() >= deadline:
             raise ValueError(f"Expected prefix parity marker missing from {log}; inspect the server before timing")
         time.sleep(0.1)
@@ -1257,7 +1302,7 @@ def main():
     )
 
     p.add_argument("--version", action="version",
-                   version="DFlash HTTP evaluator 2026-09-28.2 (selector warmup steps supported)")
+                   version="DFlash HTTP evaluator 2026-10-13.1 (integrated target/selector graphs)")
     p.add_argument("--base-url", help="http://host:port or http://host:port/v1")
     p.add_argument("--model", help="Automatically discovered when one model is served")
     p.add_argument("--method", help="Result label; defaults to launch manifest's variant label, then served model name")
@@ -1359,7 +1404,7 @@ def main():
     p.add_argument("--target-only", action="store_true")
     p.add_argument("--reference", type=Path)
     p.add_argument("--server-manifest", type=Path,
-                   help="Optional current launch metadata from the integrated launcher; omit for the manual .sh launcher")
+                   help="Current launch.json; automatically discovered by localhost port for run_server_dflash.sh")
     p.add_argument("--output", type=Path, help="Output directory for summary.csv and compact run_info.json")
     p.add_argument(
         "--clean-output",
@@ -1470,8 +1515,11 @@ def main():
         )
 
     server_manifest = read_server_manifest(args.server_manifest, client, target_config_hash)
-    if args.target_only and server_manifest and server_manifest.get("format") == "dflash_evaluator_integration_v1":
+    if args.target_only and is_integrated_server(server_manifest):
         raise ValueError("The supplied server manifest declares a speculative draft; remove --target-only")
+    if (is_integrated_server(server_manifest) and server_manifest.get("prefix_npu_graph")
+            and any(c != 1 for c in concurrencies)):
+        raise ValueError("The integrated selector graph is measured at concurrency=1; use --concurrencies 1")
     method = args.method or ((server_manifest or {}).get("suggested_method")) or ("ar" if args.target_only else client.model)
     output = args.output or Path(
         f"eval_{method}_{datetime.now(timezone.utc):%Y%m%d_%H%M%S}"
@@ -1515,6 +1563,9 @@ def main():
                     "enforce_eager",
                     "model_runner",
                     "commits",
+                    "target_execution_requested",
+                    "compilation_config",
+                    "additional_config",
                 )
             }
             if server_manifest
@@ -1554,7 +1605,7 @@ def main():
     warmup_tokens = args.selector_warmup_tokens
     required_steps = 0 if args.target_only else args.selector_warmup_steps
     expected_k = None
-    integrated = server_manifest and server_manifest.get("format") == "dflash_evaluator_integration_v1"
+    integrated = is_integrated_server(server_manifest)
     if integrated:
         required_steps = max(required_steps, server_manifest["prefix_validate_steps"])
         expected_k = server_manifest["num_speculative_tokens"]
@@ -1563,7 +1614,7 @@ def main():
     if effective_max_len and len(warmup_prompt["prompt_token_ids"]) + warmup_tokens + 16 > effective_max_len:
         raise ValueError("Startup warmup exceeds the server sequence limit; lower --selector-warmup-tokens or use a shorter prompt")
     report["performance_measurement"] = not (
-        integrated and server_manifest.get("prefix_mode") == "validate")
+        integrated and (server_manifest.get("prefix_mode") == "validate" or server_manifest.get("graph_metrics")))
     report["startup_warmup"] = {"complete": False}
 
     try:
@@ -1573,10 +1624,12 @@ def main():
         )
         report["startup_warmup"]["complete"] = True
         report["prefix_runtime_confirmation"] = confirm_prefix_runtime(server_manifest)
-        if not report["prefix_runtime_confirmation"]["verified"] and not args.target_only:
+        if integrated and server_manifest["variant"] == "vanilla":
+            print("Vanilla DFlash: no prefix selector checks apply. Target graph settings are recorded.", flush=True)
+        elif not report["prefix_runtime_confirmation"]["verified"] and not args.target_only:
             status = "Startup warmup completed." if warmup_tokens else "Startup warmup disabled."
             print(f"{status} The HTTP counters do not identify prefix graph mode. "
-                  "Check PREFIX_PARITY_PASS in the server terminal; for fast mode, also confirm "
+                  "Check PREFIX_PARITY_PASS or COMPILED_PREFIX_PARITY_PASS in the server terminal; also confirm "
                   "steady-state fast path enabled.", flush=True)
         write_summary_csv(output, report)
         for concurrency in concurrencies:
